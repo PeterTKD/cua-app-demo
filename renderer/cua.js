@@ -178,7 +178,8 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
   const calloutText = buildCalloutText(summary);
   const actionTypeName = action && action.type ? action.type : null;
   const requiresPointer = ['click', 'double_click', 'drag'].includes(actionTypeName);
-  if (!action || (requiresPointer && (typeof action.x !== 'number' || typeof action.y !== 'number'))) {
+  const hasDragPath = actionTypeName === 'drag' && Array.isArray(action?.path) && action.path.length > 1;
+  if (!action || (requiresPointer && !hasDragPath && (typeof action.x !== 'number' || typeof action.y !== 'number'))) {
     if (hasScreenshotOnlyAction(action) && !strict) {
       return runCuaOnce(question, frame, true);
     }
@@ -195,7 +196,6 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
         y: -1,
         showNext: true
       });
-      elements.lastAction.textContent = summary || 'CUA did not return coordinates.';
       return { action: null, summary, hasPointer: false, actionType: 'callout' };
     }
 
@@ -212,9 +212,17 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
   let absY = -1;
   let dipX = -1;
   let dipY = -1;
-  if (requiresPointer) {
+  let localX = -1;
+  let localY = -1;
+  let startPoint = { x: action?.x, y: action?.y };
+  let endPoint = { x: action?.x2 ?? action?.end_x ?? action?.endX, y: action?.y2 ?? action?.end_y ?? action?.endY };
+  if (actionTypeName === 'drag' && Array.isArray(action.path) && action.path.length > 1) {
+    startPoint = action.path[0];
+    endPoint = action.path[action.path.length - 1];
+  }
+  if (requiresPointer && typeof startPoint.x === 'number' && typeof startPoint.y === 'number') {
     const mapped = mapImageCoordsToDisplay(
-      { x: action.x, y: action.y },
+      { x: startPoint.x, y: startPoint.y },
       { width: frame.width, height: frame.height },
       displayInfo
     );
@@ -222,6 +230,8 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     absY = mapped.absY;
     dipX = Math.round((absX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
     dipY = Math.round((absY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y);
+    localX = Math.round(dipX - displayInfo.bounds.x);
+    localY = Math.round(dipY - displayInfo.bounds.y);
   }
 
   const normalizedActionType = actionTypeName || 'click';
@@ -247,9 +257,11 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
 
   let endDipX = -1;
   let endDipY = -1;
+  let endLocalX = -1;
+  let endLocalY = -1;
   if (normalizedActionType === 'drag') {
-    const endX = action.x2 ?? action.end_x ?? action.endX;
-    const endY = action.y2 ?? action.end_y ?? action.endY;
+    const endX = endPoint?.x;
+    const endY = endPoint?.y;
     if (typeof endX === 'number' && typeof endY === 'number') {
       const { absX: endAbsX, absY: endAbsY } = mapImageCoordsToDisplay(
         { x: endX, y: endY },
@@ -258,21 +270,29 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
       );
       endDipX = Math.round((endAbsX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
       endDipY = Math.round((endAbsY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y);
+      endLocalX = Math.round(endDipX - displayInfo.bounds.x);
+      endLocalY = Math.round(endDipY - displayInfo.bounds.y);
     }
   }
 
   const showNext = ['scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait'].includes(normalizedActionType);
   const resolvedHeading = heading || 'Click';
-  const resolvedBody = calloutText || 'Click the highlighted item to continue.';
+  let resolvedBody = calloutText || 'Click the highlighted item to continue.';
+  if (normalizedActionType === 'drag') {
+    const lower = resolvedBody.toLowerCase();
+    if (!lower.includes('drag') && !lower.includes('start') && !lower.includes('end')) {
+      resolvedBody = `${resolvedBody} Drag from the bright dot to the dim dot.`;
+    }
+  }
   await window.electronAPI.showCallout({
     heading: resolvedHeading,
     body: resolvedBody,
     borderColor,
     headingColor,
-    x: dipX,
-    y: dipY,
-    endX: endDipX,
-    endY: endDipY,
+    x: localX,
+    y: localY,
+    endX: endLocalX,
+    endY: endLocalY,
     keys,
     showNext
   });
@@ -310,10 +330,6 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
       );
     }
   }
-
-  elements.lastAction.textContent = summary
-    ? `CUA: ${summary}`
-    : `CUA action at (${Math.round(action.x)}, ${Math.round(action.y)})`;
 
   const hasPointer = ['click', 'double_click', 'drag'].includes(normalizedActionType);
   return { action, summary, element, hasPointer, actionType: normalizedActionType };
