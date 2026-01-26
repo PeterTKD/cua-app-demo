@@ -1,0 +1,42 @@
+{
+  "name": "electron-screen-share-app",
+  "version": "1.0.0",
+  "description": "Simple Electron app with screen sharing",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build-portable": "electron-builder --win portable"
+  },
+  "keywords": [
+    "electron",
+    "screen-share"
+  ],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.electron.screenshare",
+    "productName": "Screen Share App",
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**/*",
+      "node_modules/electron/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.4"
+  }
+}

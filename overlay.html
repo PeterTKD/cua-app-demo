@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Border Overlay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: transparent;
+            transition: background 0.3s;
+        }
+
+        body.clickable {
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .border {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border: 4px solid #f59e0b;
+            pointer-events: none;
+            transition: border-color 0.3s;
+        }
+
+        body.clickable .border {
+            border-color: #f59e0b;
+        }
+
+        .edge-glow {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            box-shadow:
+                inset 0 0 0 2px rgba(245, 158, 11, 0.35),
+                inset 0 0 30px rgba(245, 158, 11, 0.35),
+                inset 0 0 80px rgba(245, 158, 11, 0.3);
+            transition: opacity 0.2s ease;
+        }
+
+        body.loading .edge-glow {
+            opacity: 1;
+            animation: edgePulse 1.2s ease-in-out infinite;
+        }
+
+        #textOverlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            opacity: 1;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        #textOverlay.interactive {
+            pointer-events: auto;
+        }
+
+        #pointer {
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #f59e0b;
+            box-shadow: 0 0 0 10px rgba(245, 158, 11, 0.25),
+                        0 0 22px rgba(245, 158, 11, 0.55);
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+        }
+
+        #pointer.visible {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+
+        #pointerEnd {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #f59e0b;
+            box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.2),
+                        0 0 12px rgba(245, 158, 11, 0.5);
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #pointerEnd.visible {
+            opacity: 0.6;
+        }
+
+        #callout {
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+            background: rgba(17, 24, 39, 0.92);
+            padding: 16px 18px;
+            border-radius: 14px;
+            font-size: 17px;
+            line-height: 1.4;
+            max-width: 420px;
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+            border: 2px solid #f59e0b;
+            display: grid;
+            gap: 10px;
+        }
+
+        #calloutHeader {
+            font-weight: 700;
+            font-size: 16px;
+            letter-spacing: 0.3px;
+        }
+
+        #calloutBody {
+            color: #e2e8f0;
+            font-size: 15px;
+        }
+
+        .keycaps {
+            display: inline-flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+
+        .keycap {
+            padding: 4px 8px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            font-size: 12px;
+            color: #f8fafc;
+        }
+
+        #callout.draggable {
+            cursor: move;
+        }
+
+        #calloutActions {
+            display: none;
+        }
+
+        #calloutActions.visible {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        #calloutNext {
+            border: none;
+            border-radius: 999px;
+            background: #f59e0b;
+            color: #1f2937;
+            font-weight: 700;
+            padding: 6px 14px;
+            cursor: pointer;
+        }
+
+        #textOverlay.hidden {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(0.96);
+        }
+
+        #textOverlay.appear {
+          animation: calloutIn 0.22s ease-out;
+        }
+
+        #textOverlay.exit {
+          animation: calloutOut 0.2s ease-in forwards;
+        }
+
+        #drawingCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        body.clickable #drawingCanvas {
+            pointer-events: auto;
+            cursor: crosshair;
+        }
+
+        @keyframes edgePulse {
+            0% {
+                box-shadow:
+                    inset 0 0 0 2px rgba(245, 158, 11, 0.4),
+                    inset 0 0 20px rgba(245, 158, 11, 0.35),
+                    inset 0 0 60px rgba(245, 158, 11, 0.25);
+            }
+            50% {
+                box-shadow:
+                    inset 0 0 0 3px rgba(245, 158, 11, 0.7),
+                    inset 0 0 50px rgba(245, 158, 11, 0.6),
+                    inset 0 0 120px rgba(245, 158, 11, 0.55);
+            }
+            100% {
+                box-shadow:
+                    inset 0 0 0 2px rgba(245, 158, 11, 0.4),
+                    inset 0 0 20px rgba(245, 158, 11, 0.35),
+                    inset 0 0 60px rgba(245, 158, 11, 0.25);
+            }
+        }
+
+        @keyframes calloutIn {
+            0% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.92);
+            }
+            100% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+        }
+
+        @keyframes calloutOut {
+            0% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1);
+            }
+            100% {
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.92);
+            }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="drawingCanvas"></canvas>
+    <div class="edge-glow"></div>
+    <div class="border"></div>
+    <div id="textOverlay" class="hidden">
+        <div id="callout">
+            <div id="calloutHeader"></div>
+            <div id="calloutBody"></div>
+            <div id="keycaps" class="keycaps"></div>
+            <div id="calloutActions">
+                <button id="calloutNext" type="button">Next</button>
+            </div>
+        </div>
+    </div>
+    <div id="pointer"></div>
+    <div id="pointerEnd"></div>
+    <script>
+        // Setup canvas
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Set canvas size to window size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        // Drawing state
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        
+        // Configure drawing style
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        
+        // Mouse down - start drawing
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+        
+        // Mouse move - draw
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(e.clientX, e.clientY);
+            ctx.stroke();
+            
+            lastX = e.clientX;
+            lastY = e.clientY;
+        });
+        
+        // Mouse up - stop drawing
+        canvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+        
+        // Mouse leave - stop drawing
+        canvas.addEventListener('mouseleave', () => {
+            isDrawing = false;
+        });
+
+        function updateCallout(data) {
+            if (data && typeof data.text === 'string' && !data.body) {
+                data = {
+                    heading: 'Call Out',
+                    body: data.text,
+                    borderColor: '#ef4444',
+                    headingColor: '#ef4444',
+                    x: data.x ?? -1,
+                    y: data.y ?? -1,
+                    showNext: data.showNext || false,
+                    endX: data.endX ?? -1,
+                    endY: data.endY ?? -1
+                };
+            }
+            const calloutHeader = document.getElementById('calloutHeader');
+            const calloutBody = document.getElementById('calloutBody');
+            const calloutActions = document.getElementById('calloutActions');
+            const textOverlay = document.getElementById('textOverlay');
+            const pointer = document.getElementById('pointer');
+            const pointerEnd = document.getElementById('pointerEnd');
+            const callout = document.getElementById('callout');
+            const keycaps = document.getElementById('keycaps');
+
+            calloutHeader.textContent = data.heading || '';
+            calloutBody.textContent = data.body || '';
+            keycaps.innerHTML = '';
+            if (Array.isArray(data.keys) && data.keys.length > 0) {
+                data.keys.forEach((key) => {
+                    const cap = document.createElement('span');
+                    cap.className = 'keycap';
+                    cap.textContent = key;
+                    keycaps.appendChild(cap);
+                });
+            }
+
+            if (data.borderColor) {
+                callout.style.borderColor = data.borderColor;
+                pointer.style.background = data.borderColor;
+                pointer.style.boxShadow = `0 0 0 6px ${data.borderColor}40, 0 0 16px ${data.borderColor}99`;
+                pointerEnd.style.background = data.borderColor;
+                pointerEnd.style.boxShadow = `0 0 0 5px ${data.borderColor}33, 0 0 12px ${data.borderColor}88`;
+            }
+            if (data.headingColor) {
+                calloutHeader.style.color = data.headingColor;
+            }
+            if (data.showNext) {
+                calloutActions.classList.add('visible');
+                textOverlay.classList.add('interactive');
+                callout.classList.add('draggable');
+            } else {
+                calloutActions.classList.remove('visible');
+                textOverlay.classList.remove('interactive');
+                callout.classList.remove('draggable');
+            }
+            if (!data.body && !data.heading) {
+                textOverlay.classList.remove('appear');
+                textOverlay.classList.add('exit');
+                setTimeout(() => {
+                    textOverlay.classList.add('hidden');
+                    textOverlay.classList.remove('exit');
+                }, 200);
+                pointer.classList.remove('visible');
+                pointerEnd.classList.remove('visible');
+                return;
+            }
+
+            textOverlay.classList.remove('hidden');
+            textOverlay.classList.remove('exit');
+            textOverlay.classList.add('appear');
+            setTimeout(() => textOverlay.classList.remove('appear'), 220);
+
+            if (data.x >= 0 && data.y >= 0) {
+                const padding = 14;
+                const maxX = window.innerWidth - 340;
+                const maxY = window.innerHeight - 80;
+                const clampedX = Math.max(padding, Math.min(maxX, data.x + 12));
+                const clampedY = Math.max(padding, Math.min(maxY, data.y + 12));
+                textOverlay.style.top = clampedY + 'px';
+                textOverlay.style.left = clampedX + 'px';
+                textOverlay.style.transform = 'translate(0, 0)';
+                pointer.style.left = data.x + 'px';
+                pointer.style.top = data.y + 'px';
+                pointer.classList.add('visible');
+            } else {
+                textOverlay.style.top = '50%';
+                textOverlay.style.left = '50%';
+                textOverlay.style.transform = 'translate(-50%, -50%)';
+                pointer.classList.remove('visible');
+            }
+
+            if (data.endX >= 0 && data.endY >= 0) {
+                pointerEnd.style.left = data.endX + 'px';
+                pointerEnd.style.top = data.endY + 'px';
+                pointerEnd.classList.add('visible');
+            } else {
+                pointerEnd.classList.remove('visible');
+            }
+        }
+
+        window.overlayAPI.onUpdateText((event, data) => {
+            updateCallout(data);
+        });
+
+        window.overlayAPI.onUpdateCallout((event, data) => {
+            updateCallout(data);
+        });
+
+        document.getElementById('calloutNext').addEventListener('click', () => {
+            window.overlayAPI.sendNext();
+        });
+
+        (function enableCalloutDrag() {
+            const textOverlay = document.getElementById('textOverlay');
+            const callout = document.getElementById('callout');
+            let isDragging = false;
+            let startX = 0;
+            let startY = 0;
+            let originX = 0;
+            let originY = 0;
+
+            callout.addEventListener('mousedown', (event) => {
+                if (!callout.classList.contains('draggable')) {
+                    return;
+                }
+                if (event.target.closest('#calloutActions')) {
+                    return;
+                }
+                isDragging = true;
+                startX = event.clientX;
+                startY = event.clientY;
+                const rect = textOverlay.getBoundingClientRect();
+                originX = rect.left;
+                originY = rect.top;
+                textOverlay.style.transform = 'translate(0, 0)';
+            });
+
+            window.addEventListener('mousemove', (event) => {
+                if (!isDragging) return;
+                const deltaX = event.clientX - startX;
+                const deltaY = event.clientY - startY;
+                const nextX = Math.max(8, Math.min(window.innerWidth - textOverlay.offsetWidth - 8, originX + deltaX));
+                const nextY = Math.max(8, Math.min(window.innerHeight - textOverlay.offsetHeight - 8, originY + deltaY));
+                textOverlay.style.left = `${nextX}px`;
+                textOverlay.style.top = `${nextY}px`;
+            });
+
+            window.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        })();
+
+        // Capture clicks and send coordinates (only when not drawing)
+        document.addEventListener('click', (event) => {
+            if (!isDrawing && event.target !== canvas) {
+                window.overlayAPI.sendClick({
+                    x: event.clientX,
+                    y: event.clientY
+                });
+            }
+        });
+
+        // Capture mouse down and send coordinates
+        document.addEventListener('mousedown', (event) => {
+            window.overlayAPI.sendMouseDown({
+                x: event.clientX,
+                y: event.clientY
+            });
+        });
+
+        // Capture mouse move and send coordinates (only when not drawing)
+        document.addEventListener('mousemove', (event) => {
+            window.overlayAPI.sendMousePosition({
+                x: event.clientX,
+                y: event.clientY
+            });
+        });
+
+        // Handle clickable toggle
+        window.overlayAPI.onToggleClickable((event, isClickable) => {
+            if (isClickable) {
+                document.body.classList.add('clickable');
+            } else {
+                document.body.classList.remove('clickable');
+            }
+        });
+
+        // Handle loading glow
+        window.overlayAPI.onLoadingChanged((event, isLoading) => {
+            if (isLoading) {
+                document.body.classList.add('loading');
+            } else {
+                document.body.classList.remove('loading');
+            }
+        });
+
+        // Function to capture composite screenshot (screen + drawings)
+        window.captureCompositeScreenshot = async function(sourceId) {
+            try {
+                // Capture the screen
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        mandatory: {
+                            chromeMediaSource: 'desktop',
+                            chromeMediaSourceId: sourceId
+                        }
+                    }
+                });
+
+                // Create a video element to render the stream
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.autoplay = true;
+
+                // Wait for video to be ready
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve();
+                    };
+                });
+
+                // Wait a bit for the first frame
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Create a temporary canvas to composite screen + drawings
+                const compositeCanvas = document.createElement('canvas');
+                compositeCanvas.width = canvas.width;
+                compositeCanvas.height = canvas.height;
+                const compositeCtx = compositeCanvas.getContext('2d');
+
+                // Draw the screen capture
+                compositeCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Draw the overlay canvas (drawings) on top
+                compositeCtx.drawImage(canvas, 0, 0);
+
+                // Get composite image as data URL
+                const dataUrl = compositeCanvas.toDataURL('image/png');
+
+                // Clean up
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+
+                // Send to main process
+                window.overlayAPI.sendScreenshot(dataUrl);
+
+                return true;
+            } catch (err) {
+                console.error('Error capturing composite screenshot:', err);
+                return false;
+            }
+        };
+    </script>
+</body>
+</html>
