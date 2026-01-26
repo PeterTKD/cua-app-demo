@@ -1,5 +1,6 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, globalShortcut } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { uIOhook } = require('uiohook-napi');
 const UIAutomationDetector = require('./ui-automation');
 const { runCuaQuestion } = require('./cua-client');
@@ -17,6 +18,26 @@ let currentDisplayOriginScaleFactor = 1;
 let isOverlayClickable = false;
 let currentDisplayId = null;
 let currentDisplayBounds = null;
+const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
+const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
+
+function resolvePromptFile(name) {
+  if (name === 'system' && process.env.CUA_PROMPT_PATH) {
+    return process.env.CUA_PROMPT_PATH;
+  }
+  let version = PROMPT_VERSION;
+  if (!version) {
+    const currentPath = path.join(PROMPTS_DIR, 'current.txt');
+    if (fs.existsSync(currentPath)) {
+      version = fs.readFileSync(currentPath, 'utf8').trim();
+    }
+  }
+  if (!version) {
+    throw new Error('Missing prompt version. Set CUA_PROMPT_PATH or prompts/current.txt.');
+  }
+  const fileName = name === 'followup' ? 'followup.txt' : 'system.txt';
+  return path.join(PROMPTS_DIR, version, fileName);
+}
 
 // Initialize UI Automation detector
 const uiAutomation = new UIAutomationDetector();
@@ -145,6 +166,18 @@ ipcMain.handle('open-history-window', async (event, history) => {
   });
 
   return true;
+});
+
+ipcMain.handle('get-prompt-text', async (event, name) => {
+  const allowed = new Set(['system', 'followup']);
+  if (!allowed.has(name)) {
+    throw new Error('Unknown prompt name.');
+  }
+  const promptPath = resolvePromptFile(name);
+  if (!fs.existsSync(promptPath)) {
+    throw new Error(`Prompt file not found: ${promptPath}`);
+  }
+  return fs.readFileSync(promptPath, 'utf8');
 });
 
 // Handle IPC request to show border overlay

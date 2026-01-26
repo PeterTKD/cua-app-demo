@@ -33,6 +33,20 @@ let currentAction = null;
 const previousResponses = [];
 let lastResponseId = null;
 let hasRunOnce = false;
+let followUpPromptCache = null;
+
+async function getFollowUpPrompt() {
+  if (followUpPromptCache !== null) {
+    return followUpPromptCache;
+  }
+  try {
+    // Follow-up prompt loaded from prompts/<version>/followup.txt via main process.
+    followUpPromptCache = await window.electronAPI.getPromptText('followup');
+  } catch {
+    followUpPromptCache = '';
+  }
+  return followUpPromptCache;
+}
 
 export function getTargetRect() {
   return currentTargetRect;
@@ -105,19 +119,7 @@ export async function runCuaQuestion(question, options = {}) {
 }
 
 async function runCuaOnce(question, frame, strict) {
-  const followUpPrompt = `
-You are continuing a multi-step guided task.
-
-Use the Goal and Previous responses to decide the single next best step.
-
-History verification:
-- Compare the current screenshot with the last screenshot(s) implicitly described by the Previous responses.
-- If the current screenshot appears to be the SAME screen/state as before AND the last requested action was a click/input that should have changed the UI, acknowledge that the user likely did NOT perform it.
-  - In that case, repeat the SAME next action as before (one click tool call if needed) and give a short callout reminding the user to do it now.
-- If the UI state HAS changed as expected, proceed to the next logical step.
-- If multiple equivalent options are visible, do not click; return callout only.
-- Always return at most ONE click action.
-  `;
+  const followUpPrompt = await getFollowUpPrompt();
   const historyText = previousResponses.length > 0
     ? previousResponses.map((entry, index) => (
         `Step ${index + 1} (${entry.id})\n` +

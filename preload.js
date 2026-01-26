@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWidgetVisible: (isVisible) => ipcRenderer.invoke('set-widget-visible', isVisible),
   getSharedDisplayBounds: () => ipcRenderer.invoke('get-shared-display-bounds'),
   getDisplayInfo: (displayId) => ipcRenderer.invoke('get-display-info', displayId),
+  getPromptText: (name) => ipcRenderer.invoke('get-prompt-text', name),
   openScreenPicker: () => ipcRenderer.invoke('open-screen-picker'),
   openHistoryWindow: (history) => ipcRenderer.invoke('open-history-window', history),
   detectElementAtPoint: (x, y) => ipcRenderer.invoke('ui-automation-detect-point', { x, y }),
