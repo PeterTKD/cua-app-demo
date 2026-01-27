@@ -196,7 +196,8 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
         headingColor: ACTION_COLORS.callout,
         x: -1,
         y: -1,
-        showNext: true
+        showNext: true,
+        allowClickThrough: true
       });
       return { action: null, summary, hasPointer: false, actionType: 'callout' };
     }
@@ -296,7 +297,8 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     endX: endLocalX,
     endY: endLocalY,
     keys,
-    showNext
+    showNext,
+    allowClickThrough: true
   });
 
   const physicalX = absX >= 0 ? Math.round(absX) : null;

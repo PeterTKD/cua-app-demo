@@ -81,6 +81,7 @@
             opacity: 0;
             transition: opacity 0.2s ease, transform 0.2s ease;
             pointer-events: none;
+            z-index: 10;
         }
 
         #pointer.visible {
@@ -99,6 +100,7 @@
             transform: translate(-50%, -50%);
             opacity: 0;
             pointer-events: none;
+            z-index: 11;
         }
 
         #pointerEnd.visible {
@@ -328,6 +330,7 @@
             const pointerEnd = document.getElementById('pointerEnd');
             const callout = document.getElementById('callout');
             const keycaps = document.getElementById('keycaps');
+            const hideCallout = data.hideCallout === true;
 
             calloutHeader.textContent = data.heading || '';
             calloutBody.textContent = data.body || '';
@@ -351,7 +354,8 @@
             if (data.headingColor) {
                 calloutHeader.style.color = data.headingColor;
             }
-            if (data.showNext) {
+            const allowClickThrough = data.allowClickThrough !== false;
+            if (data.showNext && !allowClickThrough && !hideCallout) {
                 calloutActions.classList.add('visible');
                 textOverlay.classList.add('interactive');
                 callout.classList.add('draggable');
@@ -360,22 +364,19 @@
                 textOverlay.classList.remove('interactive');
                 callout.classList.remove('draggable');
             }
-            if (!data.body && !data.heading) {
+            if (hideCallout || (!data.body && !data.heading)) {
                 textOverlay.classList.remove('appear');
                 textOverlay.classList.add('exit');
                 setTimeout(() => {
                     textOverlay.classList.add('hidden');
                     textOverlay.classList.remove('exit');
                 }, 200);
-                pointer.classList.remove('visible');
-                pointerEnd.classList.remove('visible');
-                return;
+            } else {
+                textOverlay.classList.remove('hidden');
+                textOverlay.classList.remove('exit');
+                textOverlay.classList.add('appear');
+                setTimeout(() => textOverlay.classList.remove('appear'), 220);
             }
-
-            textOverlay.classList.remove('hidden');
-            textOverlay.classList.remove('exit');
-            textOverlay.classList.add('appear');
-            setTimeout(() => textOverlay.classList.remove('appear'), 220);
 
             if (data.x >= 0 && data.y >= 0) {
                 const padding = 14;

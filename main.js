@@ -8,6 +8,7 @@ const { runCuaQuestion } = require('./cua-client');
 let mainWindow;
 let overlayWindow = null;
 let highlightWindow = null;
+let calloutWindow = null;
 let screenPickerWindow = null;
 let screenPickerResolver = null;
 let historyWindow = null;
@@ -247,11 +248,57 @@ ipcMain.handle('show-callout', async (event, payload) => {
   if (!overlayWindow) {
     return false;
   }
-  overlayWindow.webContents.send('update-callout', payload);
-  if (payload && payload.showNext) {
-    overlayWindow.setIgnoreMouseEvents(false);
-  } else {
+  overlayWindow.webContents.send('update-callout', { ...payload, hideCallout: true });
+  if (!calloutWindow || calloutWindow.isDestroyed()) {
+    calloutWindow = new BrowserWindow({
+      width: 460,
+      height: 180,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: true,
+      focusable: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'callout-preload.js'),
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+    calloutWindow.loadFile('callout-window.html');
+    calloutWindow.on('closed', () => {
+      calloutWindow = null;
+    });
+  }
+  const hasText = payload && (payload.heading || payload.body);
+  if (hasText) {
+    const displayBounds = currentDisplayBounds || { x: 0, y: 0, width: 1920, height: 1080 };
+    const baseX = displayBounds.x || 0;
+    const baseY = displayBounds.y || 0;
+    const targetX = typeof payload.x === 'number' && payload.x >= 0 ? payload.x : Math.round(displayBounds.width * 0.5);
+    const targetY = typeof payload.y === 'number' && payload.y >= 0 ? payload.y : Math.round(displayBounds.height * 0.35);
+    const windowWidth = calloutWindow.getBounds().width || 460;
+    const windowHeight = calloutWindow.getBounds().height || 180;
+    const maxX = baseX + displayBounds.width - windowWidth - 12;
+    const maxY = baseY + displayBounds.height - windowHeight - 12;
+    const x = Math.max(baseX + 12, Math.min(maxX, baseX + targetX + 18));
+    const y = Math.max(baseY + 12, Math.min(maxY, baseY + targetY + 18));
+    calloutWindow.setPosition(Math.round(x), Math.round(y), false);
+    calloutWindow.show();
+  } else if (calloutWindow && !calloutWindow.isDestroyed()) {
+    calloutWindow.hide();
+  }
+  if (calloutWindow && !calloutWindow.isDestroyed()) {
+    calloutWindow.webContents.send('update-callout', payload);
+  }
+  const allowClickThrough = payload?.allowClickThrough !== false;
+  if (allowClickThrough) {
+    isOverlayClickable = false;
+    overlayWindow.webContents.send('toggle-clickable', false);
     overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+  } else {
+    overlayWindow.setIgnoreMouseEvents(false);
   }
   return true;
 });
@@ -487,6 +534,10 @@ function createWindow() {
       overlayWindow.destroy();
       overlayWindow = null;
     }
+    if (calloutWindow) {
+      calloutWindow.destroy();
+      calloutWindow = null;
+    }
     mainWindow = null;
   });
 }
@@ -526,6 +577,10 @@ app.on('before-quit', () => {
   if (overlayWindow) {
     overlayWindow.destroy();
     overlayWindow = null;
+  }
+  if (calloutWindow) {
+    calloutWindow.destroy();
+    calloutWindow = null;
   }
   
 });
