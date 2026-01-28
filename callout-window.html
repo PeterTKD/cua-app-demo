@@ -23,11 +23,19 @@
             font-size: 17px;
             line-height: 1.4;
             width: 420px;
+            max-width: 520px;
             color: #e2e8f0;
             border: 2px solid #f59e0b;
             box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
             display: grid;
             gap: 10px;
+        }
+
+        .callout.completed {
+            box-shadow:
+                0 0 0 1px rgba(22, 163, 74, 0.6),
+                0 0 22px rgba(22, 163, 74, 0.35),
+                0 12px 24px rgba(0, 0, 0, 0.35);
         }
 
         .header {
@@ -39,6 +47,7 @@
         .body {
             font-size: 15px;
             color: #e2e8f0;
+            word-break: break-word;
         }
 
         .keycaps {
@@ -59,6 +68,7 @@
         .actions {
             display: none;
             justify-content: flex-end;
+            gap: 8px;
         }
 
         .actions.visible {
@@ -75,6 +85,11 @@
             padding: 6px 14px;
             cursor: pointer;
         }
+
+        .complete-btn {
+            background: #16a34a;
+            color: #f0fdf4;
+        }
     </style>
 </head>
 <body>
@@ -84,6 +99,7 @@
         <div class="keycaps" id="keycaps"></div>
         <div class="actions" id="calloutActions">
             <button id="calloutNext" type="button">Next</button>
+            <button id="calloutComplete" class="complete-btn" type="button">Complete</button>
         </div>
     </div>
 
@@ -94,6 +110,9 @@
             const callout = document.getElementById('callout');
             const keycaps = document.getElementById('keycaps');
             const actions = document.getElementById('calloutActions');
+            const completeButton = document.getElementById('calloutComplete');
+            const showComplete = data.showComplete === true;
+            const showNext = data.showNext === true && !showComplete;
 
             calloutHeader.textContent = data.heading || '';
             calloutBody.textContent = data.body || '';
@@ -112,19 +131,37 @@
             if (data.headingColor) {
                 calloutHeader.style.color = data.headingColor;
             }
-            if (data.showNext) {
+            if (data.glowColor) {
+                callout.classList.add('completed');
+            } else {
+                callout.classList.remove('completed');
+            }
+            if (showNext || showComplete) {
                 actions.classList.add('visible');
             } else {
                 actions.classList.remove('visible');
             }
+            document.getElementById('calloutNext').style.display = showNext ? 'inline-flex' : 'none';
+            completeButton.style.display = showComplete ? 'inline-flex' : 'none';
         }
 
         window.calloutAPI.onUpdateCallout((event, data) => {
             updateCallout(data || {});
+            requestAnimationFrame(() => {
+                const callout = document.getElementById('callout');
+                const rect = callout.getBoundingClientRect();
+                const width = Math.ceil(rect.width);
+                const height = Math.ceil(rect.height);
+                window.calloutAPI.sendResize({ width, height });
+            });
         });
 
         document.getElementById('calloutNext').addEventListener('click', () => {
             window.calloutAPI.sendNext();
+        });
+
+        document.getElementById('calloutComplete').addEventListener('click', () => {
+            window.calloutAPI.sendComplete();
         });
     </script>
 </body>

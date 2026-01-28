@@ -25,7 +25,8 @@ const ACTION_COLORS = {
   type: '#3b82f6',
   wait: '#a16207',
   drag: '#facc15',
-  callout: '#ef4444'
+  callout: '#ef4444',
+  completed: '#16a34a'
 };
 
 let currentTargetRect = null;
@@ -34,6 +35,8 @@ const previousResponses = [];
 let lastResponseId = null;
 let hasRunOnce = false;
 let followUpPromptCache = null;
+let diffMethodPromptCache = null;
+let pointPromptCache = null;
 
 async function getFollowUpPrompt() {
   if (followUpPromptCache !== null) {
@@ -46,6 +49,30 @@ async function getFollowUpPrompt() {
     followUpPromptCache = '';
   }
   return followUpPromptCache;
+}
+
+async function getDiffMethodPrompt() {
+  if (diffMethodPromptCache !== null) {
+    return diffMethodPromptCache;
+  }
+  try {
+    diffMethodPromptCache = await window.electronAPI.getPromptText('diff_method');
+  } catch {
+    diffMethodPromptCache = '';
+  }
+  return diffMethodPromptCache;
+}
+
+async function getPointPrompt() {
+  if (pointPromptCache !== null) {
+    return pointPromptCache;
+  }
+  try {
+    pointPromptCache = await window.electronAPI.getPromptText('point');
+  } catch {
+    pointPromptCache = '';
+  }
+  return pointPromptCache;
 }
 
 export function getTargetRect() {
@@ -62,6 +89,12 @@ export function getCurrentAction() {
 
 export function clearCurrentAction() {
   currentAction = null;
+}
+
+export function resetCuaState() {
+  previousResponses.length = 0;
+  lastResponseId = null;
+  hasRunOnce = false;
 }
 
 async function waitForFreshVideoFrame(timeoutMs = 1000) {
@@ -111,15 +144,14 @@ export async function runCuaQuestion(question, options = {}) {
       throw new Error('Failed to capture screen frame.');
     }
 
-    const result = await runCuaOnce(question, frame, false);
+    const result = await runCuaOnce(question, frame, false, options.mode || 'normal');
     return result;
   } finally {
     await window.electronAPI.setLoadingState(false);
   }
 }
 
-async function runCuaOnce(question, frame, strict) {
-  const followUpPrompt = await getFollowUpPrompt();
+async function runCuaOnce(question, frame, strict, mode) {
   const historyText = previousResponses.length > 0
     ? previousResponses.map((entry, index) => (
         `Step ${index + 1} (${entry.id})\n` +
@@ -129,14 +161,35 @@ async function runCuaOnce(question, frame, strict) {
         `action: ${entry.action ? JSON.stringify(entry.action) : 'none'}`
       )).join('\n\n')
     : '';
-  const promptQuestion = hasRunOnce
-    ? `Goal: ${question}
+  const lastEntry = previousResponses.length > 0 ? previousResponses[previousResponses.length - 1] : null;
+  const lastEntryText = lastEntry
+    ? `Last response (${lastEntry.id})\n` +
+      `reasoning_summary: ${lastEntry.summary}\n` +
+      `type: ${lastEntry.type || 'unknown'}\n` +
+      `status: ${lastEntry.status || 'unknown'}\n` +
+      `action: ${lastEntry.action ? JSON.stringify(lastEntry.action) : 'none'}`
+    : '';
+
+  let promptQuestion = question;
+  if (mode === 'diff_method') {
+    const diffPrompt = await getDiffMethodPrompt();
+    promptQuestion = `Goal: ${question}
+${diffPrompt}
+${historyText ? `Previous responses:\n${historyText}\n` : ''}`;
+  } else if (mode === 'point') {
+    const pointPrompt = await getPointPrompt();
+    promptQuestion = `Goal: ${question}
+${pointPrompt}
+${lastEntryText ? `Previous response:\n${lastEntryText}\n` : ''}`;
+  } else if (hasRunOnce) {
+    const followUpPrompt = await getFollowUpPrompt();
+    promptQuestion = `Goal: ${question}
 Follow-up tasks:
 - Continue from the latest step
 ${followUpPrompt}
 ${historyText ? `Previous responses:\n${historyText}\n` : ''}
-`
-    : question;
+`;
+  }
   const response = await window.electronAPI.runCuaQuestion({
     question: promptQuestion,
     imageDataUrl: frame.dataUrl,
@@ -178,8 +231,27 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     }
   }
   const calloutText = buildCalloutText(summary);
+  const isTaskCompleted = typeof calloutText === 'string' && calloutText.includes('<<TASK_COMPLETED>>');
   const actionTypeName = action && action.type ? action.type : null;
   const requiresPointer = ['click', 'double_click', 'drag'].includes(actionTypeName);
+  if (isTaskCompleted) {
+    await window.electronAPI.showCallout({
+      heading: 'Task Completed',
+      body: 'Task completed.',
+      borderColor: ACTION_COLORS.completed,
+      headingColor: ACTION_COLORS.completed,
+      x: -1,
+      y: -1,
+      showNext: false,
+      showComplete: true,
+      glowColor: ACTION_COLORS.completed,
+      allowClickThrough: true
+    });
+    clearTargetRect();
+    clearCurrentAction();
+    await window.electronAPI.hideElementHighlight();
+    return { action: null, summary, hasPointer: false, actionType: 'completed' };
+  }
   const hasDragPath = actionTypeName === 'drag' && Array.isArray(action?.path) && action.path.length > 1;
   if (!action || (requiresPointer && !hasDragPath && (typeof action.x !== 'number' || typeof action.y !== 'number'))) {
     if (hasScreenshotOnlyAction(action) && !strict) {

@@ -38,3 +38,7 @@ export function getHistorySnapshot() {
     index: history.length - index
   }));
 }
+
+export function clearHistory() {
+  history.length = 0;
+}

@@ -25,5 +25,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOSWheel: (callback) => ipcRenderer.on('os-wheel', callback),
   onOSKeyDown: (callback) => ipcRenderer.on('os-keydown', callback),
   onOverlayNext: (callback) => ipcRenderer.on('overlay-next', callback),
+  onCalloutComplete: (callback) => ipcRenderer.on('callout-complete', callback),
   onMainWindowClosing: (callback) => ipcRenderer.on('main-window-closing', callback)
 });

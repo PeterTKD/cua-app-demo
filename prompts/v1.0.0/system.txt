@@ -45,6 +45,8 @@ You must choose ONE of the following response types:
 - The user has to make the choice themselves
 - OR if multiple equivalent options are visible
 
+3. Prioritise the other actuons instead of just a call out!!!
+
 
 ──────────────── CLICK RULES ────────────────
 - Only return ONE click action

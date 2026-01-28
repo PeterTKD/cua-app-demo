@@ -36,7 +36,13 @@ function resolvePromptFile(name) {
   if (!version) {
     throw new Error('Missing prompt version. Set CUA_PROMPT_PATH or prompts/current.txt.');
   }
-  const fileName = name === 'followup' ? 'followup.txt' : 'system.txt';
+  const fileName = name === 'followup'
+    ? 'followup.txt'
+    : name === 'diff_method'
+      ? 'diff_method.txt'
+      : name === 'point'
+        ? 'point.txt'
+        : 'system.txt';
   return path.join(PROMPTS_DIR, version, fileName);
 }
 
@@ -170,7 +176,7 @@ ipcMain.handle('open-history-window', async (event, history) => {
 });
 
 ipcMain.handle('get-prompt-text', async (event, name) => {
-  const allowed = new Set(['system', 'followup']);
+  const allowed = new Set(['system', 'followup', 'diff_method', 'point']);
   if (!allowed.has(name)) {
     throw new Error('Unknown prompt name.');
   }
@@ -340,6 +346,24 @@ ipcMain.on('overlay-next', () => {
   if (mainWindow) {
     mainWindow.webContents.send('overlay-next');
   }
+});
+
+ipcMain.on('callout-complete', () => {
+  if (mainWindow) {
+    mainWindow.webContents.send('callout-complete');
+  }
+  if (calloutWindow && !calloutWindow.isDestroyed()) {
+    calloutWindow.hide();
+  }
+});
+
+ipcMain.on('callout-resize', (event, size) => {
+  if (!calloutWindow || calloutWindow.isDestroyed() || !size) {
+    return;
+  }
+  const width = Math.max(320, Math.min(560, Math.round(size.width || 420)));
+  const height = Math.max(120, Math.min(420, Math.round(size.height || 180)));
+  calloutWindow.setSize(width, height, false);
 });
 
 // Handle mouse down from overlay

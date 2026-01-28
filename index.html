@@ -134,6 +134,13 @@
             display: none;
         }
 
+        .icon-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
 
         #videoElement {
             position: fixed;
@@ -166,6 +173,12 @@
             </div>
         </div>
         <div class="widget-actions">
+            <button class="icon-btn close-btn" id="closeBtn" title="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M18 6L6 18"></path>
+                    <path d="M6 6l12 12"></path>
+                </svg>
+            </button>
             <button class="icon-btn" id="selectScreenBtn" title="Choose screen">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <rect x="3" y="4" width="18" height="12" rx="2"></rect>
@@ -173,24 +186,35 @@
                     <path d="M12 16v4"></path>
                 </svg>
             </button>
-            <button class="icon-btn" id="historyBtn" title="History">
+            <button class="icon-btn" id="diffMethodBtn" title="Different method" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 6v6l4 2"></path>
+                    <path d="M21 12a9 9 0 1 1-3.5-7"></path>
+                    <path d="M21 3v5h-5"></path>
+                </svg>
+            </button>
+            <button class="icon-btn" id="pointElementBtn" title="Point at element" disabled>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 3v4"></path>
+                    <path d="M12 17v4"></path>
+                    <path d="M3 12h4"></path>
+                    <path d="M17 12h4"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+            </button>
+            <button class="icon-btn" id="historyBtn" title="History" disabled>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M12 5v14"></path>
                     <path d="M5 12h14"></path>
                 </svg>
             </button>
-            <button class="icon-btn" id="nextBtn" title="Next step">
+            <button class="icon-btn" id="nextBtn" title="Next step" disabled>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M5 12h14"></path>
                     <path d="M13 5l7 7-7 7"></path>
                 </svg>
             </button>
-            <button class="icon-btn close-btn" id="closeBtn" title="Close">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M18 6L6 18"></path>
-                    <path d="M6 6l12 12"></path>
-                </svg>
-            </button>
+
         </div>
     </div>
 

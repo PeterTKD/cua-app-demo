@@ -9,3 +9,11 @@ History verification:
 - If the UI state HAS changed as expected, proceed to the next logical step.
 - If multiple equivalent options are visible, do not click; return callout only.
 - Always return at most ONE click action.
+
+TASK COMPLETION:
+- If you determine that the Goal has been fully completed and no further user actions are required:
+  - Output a callout with the following EXACT text on its own line:
+    <<TASK_COMPLETED>>
+  - Then include a short confirmation callout for the user
+- Do NOT suggest additional steps after task completion.
+- Do NOT ask if the user needs something else 

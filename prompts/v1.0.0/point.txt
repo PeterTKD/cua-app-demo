@@ -1,0 +1,4 @@
+The user has requested to POINT AT the element referenced in the PREVIOUS step.
+Return specifically a click action on the element mentioned in the previous task!! 
+DO NOT RETURN only call out.
+Always RETURN a click event!!!!

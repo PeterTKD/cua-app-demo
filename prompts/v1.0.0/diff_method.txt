@@ -1,0 +1,4 @@
+The user has requested to try a DIFFERENT method for the CURRENT step only.
+Do NOT restart the full Goal.
+Do NOT repeat the previous action.
+Choose a different next step and do NOT repeat the last instruction

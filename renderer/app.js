@@ -1,6 +1,6 @@
 import { elements } from './dom.js';
-import { getHistorySnapshot } from './history.js';
-import { clearCurrentAction, clearTargetRect, getCurrentAction, runCuaQuestion } from './cua.js';
+import { clearHistory, getHistorySnapshot } from './history.js';
+import { clearCurrentAction, clearTargetRect, getCurrentAction, resetCuaState, runCuaQuestion } from './cua.js';
 import { ensureVideoReady, selectScreen, stopShare } from './screen-share.js';
 
 function setStatus(message, tone = 'default') {
@@ -14,11 +14,19 @@ function setStatus(message, tone = 'default') {
   }
 }
 
+function setTaskButtonsEnabled(enabled) {
+  elements.diffMethodButton.disabled = !enabled;
+  elements.pointElementButton.disabled = !enabled;
+  elements.historyButton.disabled = !enabled;
+  elements.nextButton.disabled = !enabled;
+}
+
 let lastQuestion = '';
 let isRunningCua = false;
 let lastClickTime = 0;
 let lastClickPoint = null;
 let dragArmed = false;
+let lastKeydownAt = 0;
 
 const POSITION_TOLERANCE = 20;
 const DOUBLE_CLICK_WINDOW_MS = 550;
@@ -42,8 +50,104 @@ function completeStep(message) {
   }
 }
 
+function normalizeKeyName(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function matchesKeyCombo(actionKeys, eventData) {
+  const expanded = actionKeys
+    .flatMap((key) => String(key || '').split('+'))
+    .map(normalizeKeyName)
+    .filter(Boolean);
+  const required = expanded.map((key) => {
+    if (key === 'control') return 'ctrl';
+    if (key === 'command') return 'cmd';
+    return key;
+  });
+  if (required.length === 0) return true;
+
+  const needsCtrl = required.includes('ctrl') || required.includes('control');
+  const needsAlt = required.includes('alt');
+  const needsShift = required.includes('shift');
+  const needsMeta = required.includes('meta') || required.includes('cmd') || required.includes('command') || required.includes('win');
+
+  if (needsCtrl && !eventData.ctrlKey) return false;
+  if (needsAlt && !eventData.altKey) return false;
+  if (needsShift && !eventData.shiftKey) return false;
+  if (needsMeta && !eventData.metaKey) return false;
+
+  const nonModifier = required.filter((key) => !['ctrl', 'alt', 'shift', 'meta', 'cmd', 'win'].includes(key));
+  if (nonModifier.length === 0) {
+    return true;
+  }
+
+  const rawcode = eventData.rawcode || eventData.keycode;
+  const isModifierEvent = [16, 17, 18, 91, 92].includes(rawcode);
+  const keyMatches = nonModifier.some((key) => {
+    if (key.length === 1) {
+      const upper = key.toUpperCase();
+      const code = upper.charCodeAt(0);
+      return rawcode === code;
+    }
+    if (key === 'enter') return rawcode === 13;
+    if (key === 'escape' || key === 'esc') return rawcode === 27;
+    if (key === 'tab') return rawcode === 9;
+    if (key === 'space' || key === 'spacebar') return rawcode === 32;
+    if (key === 'backspace') return rawcode === 8;
+    if (key === 'delete' || key === 'del') return rawcode === 46;
+    if (key === 'home') return rawcode === 36;
+    if (key === 'end') return rawcode === 35;
+    if (key === 'pageup' || key === 'page_up') return rawcode === 33;
+    if (key === 'pagedown' || key === 'page_down') return rawcode === 34;
+    if (key === 'insert') return rawcode === 45;
+    if (key === 'left') return rawcode === 37;
+    if (key === 'up') return rawcode === 38;
+    if (key === 'right') return rawcode === 39;
+    if (key === 'down') return rawcode === 40;
+    if (key.startsWith('f')) {
+      const n = Number.parseInt(key.slice(1), 10);
+      if (Number.isFinite(n) && n >= 1 && n <= 24) {
+        return rawcode === 111 + n;
+      }
+    }
+    return false;
+  });
+
+  if (keyMatches) {
+    return true;
+  }
+  if (nonModifier.length === 1 && !isModifierEvent) {
+    return true;
+  }
+  return false;
+}
+
+function completeTaskAndReset() {
+  clearTargetRect();
+  clearCurrentAction();
+  resetCuaState();
+  clearHistory();
+  lastQuestion = '';
+  elements.questionInput.value = '';
+  setStatus('Task completed. Ready for a new question.', 'success');
+  window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
+  window.electronAPI.hideElementHighlight();
+  setTaskButtonsEnabled(false);
+}
+
+function resolveQuestion(mode) {
+  const inputValue = elements.questionInput.value.trim();
+  if (inputValue) {
+    return inputValue;
+  }
+  if (mode && lastQuestion) {
+    return lastQuestion;
+  }
+  return '';
+}
+
 async function handleAsk(options = {}) {
-  const question = elements.questionInput.value.trim();
+  const question = resolveQuestion(options.mode);
   if (!question) {
     setStatus('Type a question before asking.', 'error');
     return;
@@ -90,6 +194,9 @@ async function handleAsk(options = {}) {
     setStatus(error.message || 'Failed to run CUA.', 'error');
   } finally {
     isRunningCua = false;
+    if (lastQuestion) {
+      setTaskButtonsEnabled(true);
+    }
   }
 }
 
@@ -131,6 +238,30 @@ function bindEvents() {
     const snapshot = getHistorySnapshot();
     await window.electronAPI.openHistoryWindow(snapshot);
   });
+  elements.diffMethodButton.addEventListener('click', async () => {
+    if (isRunningCua) {
+      return;
+    }
+    const question = resolveQuestion('diff_method');
+    if (!question) {
+      setStatus('Ask a question first so we can try a different method.', 'error');
+      return;
+    }
+    elements.questionInput.value = question;
+    await handleAsk({ delayMs: 2000, mode: 'diff_method' });
+  });
+  elements.pointElementButton.addEventListener('click', async () => {
+    if (isRunningCua) {
+      return;
+    }
+    const question = resolveQuestion('point');
+    if (!question) {
+      setStatus('Ask a question first so we can point at the element.', 'error');
+      return;
+    }
+    elements.questionInput.value = question;
+    await handleAsk({ delayMs: 2000, mode: 'point' });
+  });
   elements.nextButton.addEventListener('click', async () => {
     if (!lastQuestion || isRunningCua) {
       return;
@@ -154,6 +285,9 @@ function bindEvents() {
     }
     elements.questionInput.value = lastQuestion;
     handleAsk({ delayMs: 2000 });
+  });
+  window.electronAPI.onCalloutComplete(() => {
+    completeTaskAndReset();
   });
   elements.closeButton.addEventListener('click', () => {
     window.electronAPI.closeApp();
@@ -243,10 +377,19 @@ function bindEvents() {
     }
   });
 
-  window.electronAPI.onOSKeyDown(() => {
+  window.electronAPI.onOSKeyDown((event, data) => {
     const action = getCurrentAction();
     if (!action) return;
     if (['keypress', 'type'].includes(action.type)) {
+      if (Array.isArray(action.keys) && action.keys.length > 1) {
+        const now = Date.now();
+        if (matchesKeyCombo(action.keys, data)) {
+          completeStep('Input complete.');
+          return;
+        }
+        lastKeydownAt = now;
+        return;
+      }
       completeStep('Input complete.');
     }
   });
@@ -259,6 +402,7 @@ function bindEvents() {
 function init() {
   bindEvents();
   setStatus('Ask a question and let CUA find the target.', 'default');
+  setTaskButtonsEnabled(false);
 }
 
 init();
