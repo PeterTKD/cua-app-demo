@@ -14,6 +14,29 @@ function setStatus(message, tone = 'default') {
   }
 }
 
+function updateChatLayout() {
+  if (!elements.chatLog) return;
+  const hasMessages = elements.chatLog.children.length > 0;
+  elements.chatLog.classList.toggle('has-messages', hasMessages);
+}
+
+function addChatMessage(message, role) {
+  if (!elements.chatLog) return;
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${role === 'user' ? 'user' : 'assistant'}`;
+  bubble.textContent = message;
+  elements.chatLog.appendChild(bubble);
+  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+  updateChatLayout();
+  requestWidgetResize();
+}
+
+function clearChatLog() {
+  if (!elements.chatLog) return;
+  elements.chatLog.innerHTML = '';
+  updateChatLayout();
+}
+
 function setTaskButtonsEnabled(enabled) {
   elements.diffMethodButton.disabled = !enabled;
   elements.pointElementButton.disabled = !enabled;
@@ -27,9 +50,30 @@ let lastClickTime = 0;
 let lastClickPoint = null;
 let dragArmed = false;
 let lastKeydownAt = 0;
+let resizeRaf = null;
 
 const POSITION_TOLERANCE = 20;
 const DOUBLE_CLICK_WINDOW_MS = 550;
+
+function requestWidgetResize() {
+  if (!elements.widget || !window.electronAPI?.resizeWidget) {
+    return;
+  }
+  if (resizeRaf) {
+    cancelAnimationFrame(resizeRaf);
+  }
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = null;
+    const padding = 48;
+    const width = Math.ceil(elements.widget.scrollWidth + padding);
+    const height = Math.ceil(elements.widget.scrollHeight + padding);
+    window.electronAPI.resizeWidget({ width, height });
+  });
+}
+
+function setupResizeObserver() {
+  requestWidgetResize();
+}
 
 function withinTolerance(x, y, targetX, targetY) {
   const dx = x - targetX;
@@ -130,6 +174,7 @@ function completeTaskAndReset() {
   lastQuestion = '';
   elements.questionInput.value = '';
   setStatus('Task completed. Ready for a new question.', 'success');
+  clearChatLog();
   window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
   window.electronAPI.hideElementHighlight();
   setTaskButtonsEnabled(false);
@@ -157,11 +202,14 @@ async function handleAsk(options = {}) {
     if (isRunningCua) {
       return;
     }
+    elements.questionInput.value = '';
+    addChatMessage(question, 'user');
     const bounds = await window.electronAPI.getSharedDisplayBounds();
     if (!bounds || !bounds.bounds) {
       const selection = await selectScreen();
       if (!selection) {
         setStatus('Screen selection canceled.', 'default');
+        addChatMessage('Screen selection canceled.', 'assistant');
         return;
       }
       await ensureVideoReady();
@@ -171,6 +219,9 @@ async function handleAsk(options = {}) {
     isRunningCua = true;
     lastQuestion = question;
     const result = await runCuaQuestion(question, options);
+    if (result && result.summary) {
+      addChatMessage(result.summary.replace('<<TASK_COMPLETED>>', '').trim() || 'Done.', 'assistant');
+    }
     if (result && result.actionType === 'wait') {
       setStatus('Waiting...', 'default');
       setTimeout(() => {
@@ -192,6 +243,7 @@ async function handleAsk(options = {}) {
     }
   } catch (error) {
     setStatus(error.message || 'Failed to run CUA.', 'error');
+    addChatMessage(error.message || 'Failed to run CUA.', 'assistant');
   } finally {
     isRunningCua = false;
     if (lastQuestion) {
@@ -401,8 +453,10 @@ function bindEvents() {
 
 function init() {
   bindEvents();
-  setStatus('Ask a question and let CUA find the target.', 'default');
+  setStatus('Watching: Screen share', 'default');
   setTaskButtonsEnabled(false);
+  clearChatLog();
+  setupResizeObserver();
 }
 
 init();

@@ -518,8 +518,8 @@ async function toggleOverlayClickable() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 760,
-    height: 180,
+    width: 680,
+    height: 220,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -532,6 +532,9 @@ function createWindow() {
       contextIsolation: true
     }
   });
+  mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  mainWindow.setFullScreenable(false);
 
   // Enable screen sharing
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -594,6 +597,42 @@ app.on('will-quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
   stopOSClickCapture();
+});
+
+ipcMain.handle('resize-widget', async (event, size) => {
+  if (!mainWindow || mainWindow.isDestroyed() || !size) {
+    return false;
+  }
+  const minWidth = 360;
+  const minHeight = 220;
+  const maxHeightLimit = 720;
+
+  const width = Math.max(minWidth, Math.round(size.width || 0));
+  const height = Math.max(minHeight, Math.round(size.height || 0));
+  const display = screen.getDisplayMatching(mainWindow.getBounds());
+  const maxWidth = Math.max(minWidth, display.workArea.width - 8);
+  const maxHeight = Math.max(minHeight, Math.min(maxHeightLimit, display.workArea.height - 8));
+  const nextWidth = Math.min(width, maxWidth);
+  const nextHeight = Math.min(height, maxHeight);
+
+  const bounds = mainWindow.getBounds();
+  const bottom = bounds.y + bounds.height;
+  let nextX = bounds.x;
+  let nextY = bottom - nextHeight;
+
+  const workArea = display.workArea;
+  const minX = workArea.x;
+  const maxX = workArea.x + workArea.width - nextWidth;
+  const minY = workArea.y;
+  const maxY = workArea.y + workArea.height - nextHeight;
+
+  if (nextX < minX) nextX = minX;
+  if (nextX > maxX) nextX = maxX;
+  if (nextY < minY) nextY = minY;
+  if (nextY > maxY) nextY = maxY;
+
+  mainWindow.setBounds({ x: nextX, y: nextY, width: nextWidth, height: nextHeight }, false);
+  return true;
 });
 
 app.on('before-quit', () => {
@@ -726,5 +765,3 @@ ipcMain.handle('hide-element-highlight', async () => {
   }
   return true;
 });
-
-

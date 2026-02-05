@@ -9,5 +9,6 @@ export const elements = {
   nextButton: document.getElementById('nextBtn'),
   closeButton: document.getElementById('closeBtn'),
   statusText: document.getElementById('statusText'),
+  chatLog: document.getElementById('chatLog'),
   video: document.getElementById('videoElement')
 };

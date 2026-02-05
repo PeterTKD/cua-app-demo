@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPromptText: (name) => ipcRenderer.invoke('get-prompt-text', name),
   openScreenPicker: () => ipcRenderer.invoke('open-screen-picker'),
   openHistoryWindow: (history) => ipcRenderer.invoke('open-history-window', history),
+  resizeWidget: (size) => ipcRenderer.invoke('resize-widget', size),
   detectElementAtPoint: (x, y) => ipcRenderer.invoke('ui-automation-detect-point', { x, y }),
   showElementHighlight: (x, y, width, height, color) => ipcRenderer.invoke('show-element-highlight', { x, y, width, height, color }),
   hideElementHighlight: () => ipcRenderer.invoke('hide-element-highlight'),
