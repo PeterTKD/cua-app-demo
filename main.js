@@ -4,6 +4,7 @@ const fs = require('fs');
 const { uIOhook } = require('uiohook-napi');
 const UIAutomationDetector = require('./ui-automation');
 const { runCuaQuestion } = require('./cua-client');
+const { runReasonerQuestion } = require('./reasoner-client');
 
 let mainWindow;
 let overlayWindow = null;
@@ -666,6 +667,16 @@ ipcMain.handle('cua-run', async (event, payload) => {
     return response;
   } catch (error) {
     console.error('CUA error:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('reasoner-run', async (event, payload) => {
+  try {
+    const response = await runReasonerQuestion(payload);
+    return response;
+  } catch (error) {
+    console.error('Reasoner error:', error);
     throw error;
   }
 });

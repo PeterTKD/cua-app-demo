@@ -1,50 +1,30 @@
-const fs = require('fs');
+﻿const fs = require('fs');
 const path = require('path');
 
 const DEFAULT_CUA_ENDPOINT = process.env.CUA_ENDPOINT || 'https://api.openai.com/v1/responses';
-const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
-const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
+const CUA_PROMPT_PATH = process.env.CUA_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.1', 'cua.txt');
 
-function resolvePromptPath() {
-  if (process.env.CUA_PROMPT_PATH) {
-    return process.env.CUA_PROMPT_PATH;
+function loadCuaPrompt() {
+  if (!fs.existsSync(CUA_PROMPT_PATH)) {
+    return '';
   }
-  let version = PROMPT_VERSION;
-  if (!version) {
-    const currentPath = path.join(PROMPTS_DIR, 'current.txt');
-    if (fs.existsSync(currentPath)) {
-      version = fs.readFileSync(currentPath, 'utf8').trim();
-    }
-  }
-  if (!version) {
-    throw new Error('Missing prompt version. Set CUA_PROMPT_PATH or prompts/current.txt.');
-  }
-  return path.join(PROMPTS_DIR, version, 'system.txt');
+  return fs.readFileSync(CUA_PROMPT_PATH, 'utf8');
 }
 
-function loadPrompt() {
-  const promptPath = resolvePromptPath();
-  if (!fs.existsSync(promptPath)) {
-    throw new Error(`Prompt file not found: ${promptPath}`);
-  }
-  return fs.readFileSync(promptPath, 'utf8');
-}
 
-function buildCuaPayload({ question, imageDataUrl, displayWidth, displayHeight, strict }) {
+function buildCuaPayload({ question, imageDataUrl, displayWidth, displayHeight }) {
   const model = process.env.CUA_MODEL || 'computer-use-preview';
   const environment = process.env.CUA_ENVIRONMENT || 'windows';
-  // Base system prompt loaded from prompts/<version>/system.txt (or env override).
-  const prompt = loadPrompt();
-
+  const instructions = loadCuaPrompt();
 
   return {
     model,
-    instructions: prompt,
+    instructions,
     input: [
       {
         role: 'user',
         content: [
-          { type: 'input_text', text: `${question}`},
+          { type: 'input_text', text: `${question}` },
           { type: 'input_image', image_url: imageDataUrl }
         ]
       }
@@ -63,7 +43,7 @@ function buildCuaPayload({ question, imageDataUrl, displayWidth, displayHeight, 
   };
 }
 
-async function runCuaQuestion({ question, imageDataUrl, displayWidth, displayHeight, strict }) {
+async function runCuaQuestion({ question, imageDataUrl, displayWidth, displayHeight }) {
   if (!question) {
     throw new Error('Missing question');
   }
@@ -79,7 +59,7 @@ async function runCuaQuestion({ question, imageDataUrl, displayWidth, displayHei
     throw new Error('Missing CUA_API_KEY or OPENAI_API_KEY');
   }
 
-  const payload = buildCuaPayload({ question, imageDataUrl, displayWidth, displayHeight, strict });
+  const payload = buildCuaPayload({ question, imageDataUrl, displayWidth, displayHeight });
   const maxAttempts = 2;
   let lastError = null;
 

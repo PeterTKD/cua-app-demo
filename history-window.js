@@ -1,4 +1,4 @@
-function renderHistory(items) {
+﻿function renderHistory(items) {
   const list = document.getElementById('historyList');
   list.textContent = '';
 
@@ -15,15 +15,23 @@ function renderHistory(items) {
     wrapper.className = 'item';
 
     const title = document.createElement('h4');
-    title.textContent = `Question ${item.index}: ${item.question}`;
+    if (item.type === 'note') {
+      title.textContent = `Event ${item.index}: ${item.message || ''}`;
+    } else {
+      title.textContent = `Question ${item.index}: ${item.question}`;
+    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    const durationText = item.durationMs ? `${Math.round(item.durationMs)} ms` : 'n/a';
-    const tokensText = item.totalTokens ? `tokens: ${item.totalTokens}` : 'tokens: n/a';
-    const inputText = item.inputTokens ? `in: ${item.inputTokens}` : 'in: n/a';
-    const outputText = item.outputTokens ? `out: ${item.outputTokens}` : 'out: n/a';
-    meta.textContent = `duration: ${durationText} · ${tokensText} · ${inputText} · ${outputText}`;
+    if (item.type === 'note') {
+      meta.textContent = 'note';
+    } else {
+      const reasonerDuration = item.reasonerDurationMs ? `${Math.round(item.reasonerDurationMs)} ms` : 'n/a';
+      const cuaDurations = Array.isArray(item.cuaResponses)
+        ? item.cuaResponses.map((entry, idx) => `CUA ${idx + 1}: ${entry.durationMs ? Math.round(entry.durationMs) : 'n/a'} ms`).join(' | ')
+        : 'CUA: n/a';
+      meta.textContent = `reasoner: ${reasonerDuration} - ${cuaDurations}`;
+    }
 
     if (item.screenshot) {
       const img = document.createElement('img');
@@ -33,12 +41,18 @@ function renderHistory(items) {
       wrapper.appendChild(img);
     }
 
-    const pre = document.createElement('pre');
-    pre.textContent = JSON.stringify(item.response, null, 2);
+    if (item.type !== 'note') {
+      const pre = document.createElement('pre');
+      const payload = {
+        reasoner: item.reasonerResponse || null,
+        cua: item.cuaResponses || []
+      };
+      pre.textContent = JSON.stringify(payload, null, 2);
+      wrapper.appendChild(pre);
+    }
 
     wrapper.appendChild(title);
     wrapper.appendChild(meta);
-    wrapper.appendChild(pre);
     list.appendChild(wrapper);
   });
 }

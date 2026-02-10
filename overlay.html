@@ -308,6 +308,78 @@
             isDrawing = false;
         });
 
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderMarkdown(value) {
+            const text = escapeHtml(value);
+            const lines = text.split(/\r?\n/);
+            let html = '';
+            let inCode = false;
+            let listOpen = false;
+            let codeBuffer = [];
+
+            const flushList = () => {
+                if (listOpen) {
+                    html += '</ul>';
+                    listOpen = false;
+                }
+            };
+
+            lines.forEach((line) => {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('```')) {
+                    if (inCode) {
+                        html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
+                        codeBuffer = [];
+                        inCode = false;
+                    } else {
+                        flushList();
+                        inCode = true;
+                    }
+                    return;
+                }
+                if (inCode) {
+                    codeBuffer.push(line);
+                    return;
+                }
+                const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+                if (listMatch) {
+                    if (!listOpen) {
+                        html += '<ul>';
+                        listOpen = true;
+                    }
+                    html += `<li>${listMatch[1]}</li>`;
+                    return;
+                }
+                flushList();
+                if (!trimmed) {
+                    html += '<br />';
+                    return;
+                }
+                html += `<p>${trimmed}</p>`;
+            });
+
+            flushList();
+            if (inCode && codeBuffer.length) {
+                html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
+            }
+
+            html = html
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/(^|[^*])\*(?!\s)([^*]+?)\*(?!\w)/g, '$1<em>$2</em>')
+                .replace(/`([^`]+)`/g, '<code>$1</code>')
+                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+
+            return html;
+        }
+
         function updateCallout(data) {
             if (data && typeof data.text === 'string' && !data.body) {
                 data = {
@@ -333,7 +405,7 @@
             const hideCallout = data.hideCallout === true;
 
             calloutHeader.textContent = data.heading || '';
-            calloutBody.textContent = data.body || '';
+            calloutBody.innerHTML = renderMarkdown(data.body || '');
             keycaps.innerHTML = '';
             if (Array.isArray(data.keys) && data.keys.length > 0) {
                 data.keys.forEach((key) => {

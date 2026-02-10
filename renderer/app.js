@@ -1,6 +1,17 @@
 import { elements } from './dom.js';
-import { clearHistory, getHistorySnapshot } from './history.js';
-import { clearCurrentAction, clearTargetRect, getCurrentAction, resetCuaState, runCuaQuestion } from './cua.js';
+import { addHistoryNote, clearHistory, getHistorySnapshot } from './history.js';
+import {
+  clearCurrentAction,
+  clearTargetRect,
+  fadeGuidance,
+  getCurrentAction,
+  addConversationNote,
+  handleActionCriteriaMet,
+  handleActionCriteriaNotMet,
+  hasPendingAction,
+  resetCuaState,
+  runCuaQuestion
+} from './cua.js';
 import { ensureVideoReady, selectScreen, stopShare } from './screen-share.js';
 
 function setStatus(message, tone = 'default') {
@@ -20,11 +31,113 @@ function updateChatLayout() {
   elements.chatLog.classList.toggle('has-messages', hasMessages);
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderMarkdown(value) {
+  const text = escapeHtml(value || '');
+  const lines = text.split(/\r?\n/);
+  let html = '';
+  let inCode = false;
+  let listOpen = false;
+  let codeBuffer = [];
+
+  const flushList = () => {
+    if (listOpen) {
+      html += '</ul>';
+      listOpen = false;
+    }
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      if (inCode) {
+        html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
+        codeBuffer = [];
+        inCode = false;
+      } else {
+        flushList();
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      codeBuffer.push(line);
+      return;
+    }
+    const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (listMatch) {
+      if (!listOpen) {
+        html += '<ul>';
+        listOpen = true;
+      }
+      html += `<li>${listMatch[1]}</li>`;
+      return;
+    }
+    flushList();
+    if (!trimmed) {
+      html += '<br />';
+      return;
+    }
+    html += `<p>${trimmed}</p>`;
+  });
+
+  flushList();
+  if (inCode && codeBuffer.length) {
+    html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
+  }
+
+  html = html
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*(?!\s)([^*]+?)\*(?!\w)/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+
+  return html;
+}
+
 function addChatMessage(message, role) {
   if (!elements.chatLog) return;
+  if (role === 'assistant' && typeof message === 'string' && message.includes('<<TASK_COMPLETED>>')) {
+    addSystemMessage('<<TASK_COMPLETED>> Task Completed');
+    const cleaned = message.replace('<<TASK_COMPLETED>>', '').replace(/^\s+/, '').trim();
+    if (!cleaned) {
+      return;
+    }
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble assistant';
+    bubble.innerHTML = renderMarkdown(cleaned);
+    elements.chatLog.appendChild(bubble);
+    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+    updateChatLayout();
+    requestWidgetResize();
+    return;
+  }
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${role === 'user' ? 'user' : 'assistant'}`;
-  bubble.textContent = message;
+  bubble.innerHTML = renderMarkdown(message);
+  elements.chatLog.appendChild(bubble);
+  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+  updateChatLayout();
+  requestWidgetResize();
+}
+
+function addSystemMessage(text) {
+  if (!elements.chatLog) return;
+  const bubble = document.createElement('div');
+  const isTaskCompleted = typeof text === 'string' && text.includes('<<TASK_COMPLETED>>');
+  bubble.className = isTaskCompleted ? 'chat-bubble system task-completed' : 'chat-bubble system';
+  const cleaned = isTaskCompleted
+    ? text.replace('<<TASK_COMPLETED>>', '').replace(/^\s+/, '').trim()
+    : text;
+  bubble.textContent = cleaned || (isTaskCompleted ? 'Task Completed' : '');
   elements.chatLog.appendChild(bubble);
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
   updateChatLayout();
@@ -82,16 +195,26 @@ function withinTolerance(x, y, targetX, targetY) {
 }
 
 function completeStep(message) {
+  const action = getCurrentAction();
   setStatus(message, 'success');
   clearTargetRect();
   clearCurrentAction();
   window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
   window.electronAPI.hideElementHighlight();
-  if (lastQuestion && !isRunningCua) {
-    setTimeout(() => {
-      handleAsk({ delayMs: 2000 });
-    }, 1000);
+  const { hasMore } = handleActionCriteriaMet();
+  if (hasMore) {
+    setStatus('Next highlight ready.', 'success');
+    return;
   }
+  if (action && action.type === 'pinpoint') {
+    return;
+  }
+  addHistoryNote('User Completed The Action');
+  addConversationNote('User Completed The Action');
+  addSystemMessage('Action Completed');
+  setTimeout(() => {
+    handleAsk({ delayMs: 2000, auto: true, userStatus: 'Action Criteria Met', allowEmpty: true });
+  }, 1000);
 }
 
 function normalizeKeyName(value) {
@@ -180,20 +303,20 @@ function completeTaskAndReset() {
   setTaskButtonsEnabled(false);
 }
 
-function resolveQuestion(mode) {
+function resolveQuestion(mode, forceLast = false) {
   const inputValue = elements.questionInput.value.trim();
   if (inputValue) {
     return inputValue;
   }
-  if (mode && lastQuestion) {
+  if ((mode || forceLast) && lastQuestion) {
     return lastQuestion;
   }
   return '';
 }
 
 async function handleAsk(options = {}) {
-  const question = resolveQuestion(options.mode);
-  if (!question) {
+  const question = resolveQuestion(options.mode, options.auto === true);
+  if (!question && !options.allowEmpty) {
     setStatus('Type a question before asking.', 'error');
     return;
   }
@@ -202,8 +325,18 @@ async function handleAsk(options = {}) {
     if (isRunningCua) {
       return;
     }
+    if (hasPendingAction()) {
+      fadeGuidance();
+      handleActionCriteriaNotMet();
+      options.userStatus = 'Action Criteria Was not met';
+      if (question) {
+        addHistoryNote(`User input: ${question}`);
+      }
+    }
     elements.questionInput.value = '';
-    addChatMessage(question, 'user');
+    if (!options.auto && question) {
+      addChatMessage(question, 'user');
+    }
     const bounds = await window.electronAPI.getSharedDisplayBounds();
     if (!bounds || !bounds.bounds) {
       const selection = await selectScreen();
@@ -217,10 +350,14 @@ async function handleAsk(options = {}) {
     }
     setStatus('Sending question to CUA...', 'default');
     isRunningCua = true;
-    lastQuestion = question;
+    if (question) {
+      if (question) {
+      lastQuestion = question;
+    }
+    }
     const result = await runCuaQuestion(question, options);
-    if (result && result.summary) {
-      addChatMessage(result.summary.replace('<<TASK_COMPLETED>>', '').trim() || 'Done.', 'assistant');
+    if (result && result.answer) {
+      addChatMessage(result.answer, 'assistant');
     }
     if (result && result.actionType === 'wait') {
       setStatus('Waiting...', 'default');
@@ -229,12 +366,16 @@ async function handleAsk(options = {}) {
       }, 2000);
       return;
     }
+    if (result && result.actionType === 'callout') {
+      setStatus('Callout shown.', 'default');
+      return;
+    }
     if (result && result.hasPointer === false) {
       setStatus('No pointer yet. Press Next to continue.', 'default');
       if (lastQuestion && !isRunningCua) {
         setTimeout(() => {
           if (!isRunningCua) {
-            handleAsk({ delayMs: 2000 });
+            handleAsk({ delayMs: 2000, auto: true, forceLast: true });
           }
         }, 2000);
       }
@@ -319,24 +460,24 @@ function bindEvents() {
       return;
     }
     const action = getCurrentAction();
-    if (action && !['click', 'double_click', 'drag'].includes(action.type)) {
+    if (action && (!['click', 'double_click', 'drag'].includes(action.type) || action.type === 'pinpoint')) {
       completeStep('Step complete.');
       return;
     }
     elements.questionInput.value = lastQuestion;
-    await handleAsk({ delayMs: 2000 });
+    await handleAsk({ delayMs: 2000, auto: true, forceLast: true });
   });
   window.electronAPI.onOverlayNext(() => {
     if (!lastQuestion || isRunningCua) {
       return;
     }
     const action = getCurrentAction();
-    if (action && !['click', 'double_click', 'drag'].includes(action.type)) {
+    if (action && (!['click', 'double_click', 'drag'].includes(action.type) || action.type === 'pinpoint')) {
       completeStep('Step complete.');
       return;
     }
     elements.questionInput.value = lastQuestion;
-    handleAsk({ delayMs: 2000 });
+    handleAsk({ delayMs: 2000, auto: true, forceLast: true });
   });
   window.electronAPI.onCalloutComplete(() => {
     completeTaskAndReset();
@@ -408,7 +549,16 @@ function bindEvents() {
 
   window.electronAPI.onOSMouseMove((event, data) => {
     const action = getCurrentAction();
-    if (!action || action.type !== 'drag' || !dragArmed) {
+    if (!action) {
+      return;
+    }
+    if (action.type === 'pinpoint') {
+      if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
+        completeStep('Pinpoint acknowledged.');
+      }
+      return;
+    }
+    if (action.type !== 'drag' || !dragArmed) {
       return;
     }
     if (action.x2 && action.y2 && withinTolerance(data.absoluteX, data.absoluteY, action.x2, action.y2)) {

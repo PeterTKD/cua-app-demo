@@ -52,16 +52,32 @@ export function captureFrame() {
     throw new Error('No active screen stream');
   }
 
-  const canvas = document.createElement('canvas');
-  canvas.width = elements.video.videoWidth;
-  canvas.height = elements.video.videoHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(elements.video, 0, 0, canvas.width, canvas.height);
+  const sourceWidth = elements.video.videoWidth;
+  const sourceHeight = elements.video.videoHeight;
+  const maxDimension = 1280;
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+  const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
+  const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+
+  const fullCanvas = document.createElement('canvas');
+  fullCanvas.width = sourceWidth;
+  fullCanvas.height = sourceHeight;
+  const fullCtx = fullCanvas.getContext('2d');
+  fullCtx.drawImage(elements.video, 0, 0, sourceWidth, sourceHeight);
+
+  const scaledCanvas = document.createElement('canvas');
+  scaledCanvas.width = targetWidth;
+  scaledCanvas.height = targetHeight;
+  const scaledCtx = scaledCanvas.getContext('2d');
+  scaledCtx.drawImage(fullCanvas, 0, 0, targetWidth, targetHeight);
 
   return {
-    dataUrl: canvas.toDataURL('image/png'),
-    width: canvas.width,
-    height: canvas.height
+    dataUrl: fullCanvas.toDataURL('image/png'),
+    width: fullCanvas.width,
+    height: fullCanvas.height,
+    reasonerDataUrl: scaledCanvas.toDataURL('image/jpeg', 0.7),
+    reasonerWidth: scaledCanvas.width,
+    reasonerHeight: scaledCanvas.height
   };
 }
 

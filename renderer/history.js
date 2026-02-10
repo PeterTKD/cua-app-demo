@@ -2,39 +2,45 @@ const history = [];
 
 export function addHistoryItem({
   question,
-  response,
   screenshot,
-  durationMs,
-  inputTokens,
-  outputTokens,
-  totalTokens
+  reasonerResponse,
+  reasonerDurationMs,
+  cuaResponses
 }) {
   history.unshift({
     id: crypto.randomUUID(),
+    type: 'question',
     question,
-    response,
     screenshot,
-    durationMs,
-    inputTokens,
-    outputTokens,
-    totalTokens,
+    reasonerResponse,
+    reasonerDurationMs,
+    cuaResponses: Array.isArray(cuaResponses) ? cuaResponses : [],
     timestamp: new Date()
   });
 
-  if (history.length > 12) {
-    history.pop();
-  }
+  // Unlimited history (no cap).
+}
+
+export function addHistoryNote(message) {
+  if (!message) return;
+  history.unshift({
+    id: crypto.randomUUID(),
+    type: 'note',
+    message: String(message),
+    timestamp: new Date()
+  });
+  // Unlimited history (no cap).
 }
 
 export function getHistorySnapshot() {
   return history.map((item, index) => ({
+    type: item.type || 'question',
     question: item.question,
-    response: item.response,
+    message: item.message,
     screenshot: item.screenshot,
-    durationMs: item.durationMs,
-    inputTokens: item.inputTokens,
-    outputTokens: item.outputTokens,
-    totalTokens: item.totalTokens,
+    reasonerResponse: item.reasonerResponse,
+    reasonerDurationMs: item.reasonerDurationMs,
+    cuaResponses: item.cuaResponses,
     index: history.length - index
   }));
 }

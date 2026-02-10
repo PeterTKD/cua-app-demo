@@ -1,78 +1,81 @@
-import { elements } from './dom.js';
+﻿import { elements } from './dom.js';
 import { captureFrame } from './screen-share.js';
 import { addHistoryItem } from './history.js';
 import { extractCuaAction, hasScreenshotOnlyAction, mapImageCoordsToDisplay } from './utils.js';
-
-function buildCalloutText(summary) {
-  if (!summary) {
-    return 'Click the highlighted item to continue.';
-  }
-
-  const cleaned = summary.replace(/\s+/g, ' ').trim();
-  const hasCoords = /(?:^|\\b)[xy]\\s*[:=]\\s*\\d+/i.test(cleaned) ||
-    /click action/i.test(cleaned) ||
-    /button\\s*:\\s*\\d+/i.test(cleaned);
-
-
-  return cleaned;
-}
 
 const ACTION_COLORS = {
   click: '#1f2937',
   double_click: '#22c55e',
   scroll: '#a855f7',
+  scroll_up: '#a855f7',
+  scroll_down: '#a855f7',
   keypress: '#0f766e',
   type: '#3b82f6',
   wait: '#a16207',
   drag: '#facc15',
+  pinpoint: '#7dd3fc',
   callout: '#ef4444',
   completed: '#16a34a'
 };
 
+const CALLOUT_TYPE_COLORS = {
+  info: '#38bdf8',
+  hint: '#a78bfa',
+  warning: '#f59e0b',
+  'error-solving': '#ef4444'
+};
+
 let currentTargetRect = null;
 let currentAction = null;
-const previousResponses = [];
-let lastResponseId = null;
-let hasRunOnce = false;
-let followUpPromptCache = null;
-let diffMethodPromptCache = null;
-let pointPromptCache = null;
+let lastCuaSummary = null;
+let pendingAction = false;
+let queuedActions = [];
+let queuedFrame = null;
+let conversationHistory = [];
+let lastCalloutPayload = null;
 
-async function getFollowUpPrompt() {
-  if (followUpPromptCache !== null) {
-    return followUpPromptCache;
-  }
-  try {
-    // Follow-up prompt loaded from prompts/<version>/followup.txt via main process.
-    followUpPromptCache = await window.electronAPI.getPromptText('followup');
-  } catch {
-    followUpPromptCache = '';
-  }
-  return followUpPromptCache;
+function pushConversation(role, text) {
+  if (!text) return;
+  conversationHistory.push({ role, content: text });
+  // Unlimited conversation history (no cap).
 }
 
-async function getDiffMethodPrompt() {
-  if (diffMethodPromptCache !== null) {
-    return diffMethodPromptCache;
-  }
-  try {
-    diffMethodPromptCache = await window.electronAPI.getPromptText('diff_method');
-  } catch {
-    diffMethodPromptCache = '';
-  }
-  return diffMethodPromptCache;
+export function addConversationNote(text) {
+  pushConversation('system', text);
 }
 
-async function getPointPrompt() {
-  if (pointPromptCache !== null) {
-    return pointPromptCache;
+function buildCalloutText(summary) {
+  if (!summary) {
+    return 'Follow the on-screen guidance.';
+  }
+  return summary.replace(/\s+/g, ' ').trim();
+}
+
+function getDurationMs(response) {
+  if (!response || !response.created_at || !response.completed_at) return null;
+  return (response.completed_at - response.created_at) * 1000;
+}
+
+function extractReasonerJson(response) {
+  if (!response) {
+    throw new Error('Empty reasoner response');
+  }
+  let text = response.output_text;
+  if (!text && Array.isArray(response.output)) {
+    const message = response.output.find((item) => item.type === 'message');
+    const content = message?.content?.find((entry) => entry.type === 'output_text');
+    if (content?.text) {
+      text = content.text;
+    }
+  }
+  if (!text) {
+    throw new Error('Reasoner returned no output text');
   }
   try {
-    pointPromptCache = await window.electronAPI.getPromptText('point');
-  } catch {
-    pointPromptCache = '';
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Reasoner returned invalid JSON: ${error.message}`);
   }
-  return pointPromptCache;
 }
 
 export function getTargetRect() {
@@ -92,12 +95,64 @@ export function clearCurrentAction() {
 }
 
 export function resetCuaState() {
-  previousResponses.length = 0;
-  lastResponseId = null;
-  hasRunOnce = false;
+  conversationHistory = [];
+  lastCuaSummary = null;
+  pendingAction = false;
+  queuedActions = [];
+  queuedFrame = null;
+  lastCalloutPayload = null;
+  clearTargetRect();
+  clearCurrentAction();
 }
 
-async function waitForFreshVideoFrame(timeoutMs = 1000) {
+export function getLastCuaSummary() {
+  return lastCuaSummary;
+}
+
+export function hasPendingAction() {
+  return pendingAction;
+}
+
+export function fadeGuidance() {
+  if (lastCalloutPayload) {
+    window.electronAPI.showCallout({ ...lastCalloutPayload, fadeOut: true });
+    setTimeout(() => {
+      window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
+    }, 220);
+  } else {
+    window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
+  }
+  window.electronAPI.hideElementHighlight();
+  clearTargetRect();
+  clearCurrentAction();
+  lastCalloutPayload = null;
+}
+
+export function handleActionCriteriaMet() {
+  const summary = lastCuaSummary;
+  pendingAction = false;
+  if (queuedActions.length > 0 && queuedFrame) {
+    const next = queuedActions.shift();
+    presentCuaAction({
+      action: next.action,
+      summary: next.summary,
+      frame: queuedFrame,
+      actionTypeOverride: next.actionTypeOverride,
+      calloutText: next.calloutText,
+      calloutType: next.calloutType
+    });
+    return { summary, hasMore: true };
+  }
+  return { summary, hasMore: false };
+}
+
+export function handleActionCriteriaNotMet() {
+  pendingAction = false;
+  queuedActions = [];
+  queuedFrame = null;
+}
+
+async function waitForFreshVideoFrame(timeoutMs = 600) {
   if (elements.video && typeof elements.video.requestVideoFrameCallback === 'function') {
     await Promise.race([
       new Promise((resolve) => {
@@ -110,86 +165,8 @@ async function waitForFreshVideoFrame(timeoutMs = 1000) {
   await new Promise((resolve) => setTimeout(resolve, Math.min(200, timeoutMs)));
 }
 
-export async function runCuaQuestion(question, options = {}) {
-  if (!question) {
-    throw new Error('Enter a question first.');
-  }
-
-  const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 0;
-  const captureDelayMs = Number.isFinite(options.captureDelayMs) ? options.captureDelayMs : 200;
-  await window.electronAPI.setLoadingState(true);
-  try {
-    await window.electronAPI.setWidgetVisible(true);
-    await window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
-    await window.electronAPI.hideElementHighlight();
-    clearTargetRect();
-    clearCurrentAction();
-
-    let frame;
-    try {
-      if (delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-      if (captureDelayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
-      }
-      await waitForFreshVideoFrame();
-      await waitForFreshVideoFrame();
-      frame = captureFrame();
-    } finally {
-      // Keep widget visible during capture.
-    }
-
-    if (!frame) {
-      throw new Error('Failed to capture screen frame.');
-    }
-
-    const result = await runCuaOnce(question, frame, false, options.mode || 'normal');
-    return result;
-  } finally {
-    await window.electronAPI.setLoadingState(false);
-  }
-}
-
-async function runCuaOnce(question, frame, strict, mode) {
-  const historyText = previousResponses.length > 0
-    ? previousResponses.map((entry, index) => (
-        `Step ${index + 1} (${entry.id})\n` +
-        `reasoning_summary: ${entry.summary}\n` +
-        `type: ${entry.type || 'unknown'}\n` +
-        `status: ${entry.status || 'unknown'}\n` +
-        `action: ${entry.action ? JSON.stringify(entry.action) : 'none'}`
-      )).join('\n\n')
-    : '';
-  const lastEntry = previousResponses.length > 0 ? previousResponses[previousResponses.length - 1] : null;
-  const lastEntryText = lastEntry
-    ? `Last response (${lastEntry.id})\n` +
-      `reasoning_summary: ${lastEntry.summary}\n` +
-      `type: ${lastEntry.type || 'unknown'}\n` +
-      `status: ${lastEntry.status || 'unknown'}\n` +
-      `action: ${lastEntry.action ? JSON.stringify(lastEntry.action) : 'none'}`
-    : '';
-
-  let promptQuestion = question;
-  if (mode === 'diff_method') {
-    const diffPrompt = await getDiffMethodPrompt();
-    promptQuestion = `Goal: ${question}
-${diffPrompt}
-${historyText ? `Previous responses:\n${historyText}\n` : ''}`;
-  } else if (mode === 'point') {
-    const pointPrompt = await getPointPrompt();
-    promptQuestion = `Goal: ${question}
-${pointPrompt}
-${lastEntryText ? `Previous response:\n${lastEntryText}\n` : ''}`;
-  } else if (hasRunOnce) {
-    const followUpPrompt = await getFollowUpPrompt();
-    promptQuestion = `Goal: ${question}
-Follow-up tasks:
-- Continue from the latest step
-${followUpPrompt}
-${historyText ? `Previous responses:\n${historyText}\n` : ''}
-`;
-  }
+async function runCuaInstruction({ call, frame, strict }) {
+  const promptQuestion = `Action: ${call.action}\nInstruction: ${call.target_description}`;
   const response = await window.electronAPI.runCuaQuestion({
     question: promptQuestion,
     imageDataUrl: frame.dataUrl,
@@ -197,82 +174,63 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     displayHeight: frame.height,
     strict
   });
-
-  const durationMs = response && response.created_at && response.completed_at
-    ? (response.completed_at - response.created_at) * 1000
-    : null;
-  const usage = response && response.usage ? response.usage : {};
-  addHistoryItem({
-    question,
-    response,
-    screenshot: frame.dataUrl,
-    durationMs,
-    inputTokens: usage.input_tokens || null,
-    outputTokens: usage.output_tokens || null,
-    totalTokens: usage.total_tokens || null
-  });
-
-  const { action, summary, actionType, actionStatus } = extractCuaAction(response);
-  hasRunOnce = true;
-  if (response && response.id) {
-    lastResponseId = response.id;
+  const { action, summary } = extractCuaAction(response);
+  if (hasScreenshotOnlyAction(action) && !strict) {
+    return runCuaInstruction({ call, frame, strict: true });
   }
-  const storedSummary = summary || 'No summary available';
-  if (storedSummary) {
-    previousResponses.push({
-      id: response && response.id ? response.id : 'unknown',
-      summary: storedSummary,
-      type: actionType,
-      status: actionStatus,
-      action: action || null
-    });
-    if (previousResponses.length > 8) {
-      previousResponses.shift();
-    }
+  return { response, action, summary };
+}
+
+function resolveCalloutColor(calloutType, actionType) {
+  if (actionType === 'pinpoint') {
+    return '#7dd3fc';
   }
-  const calloutText = buildCalloutText(summary);
-  const isTaskCompleted = typeof calloutText === 'string' && calloutText.includes('<<TASK_COMPLETED>>');
-  const actionTypeName = action && action.type ? action.type : null;
-  const requiresPointer = ['click', 'double_click', 'drag'].includes(actionTypeName);
-  if (isTaskCompleted) {
+  if (calloutType && CALLOUT_TYPE_COLORS[calloutType]) {
+    return CALLOUT_TYPE_COLORS[calloutType];
+  }
+  if (actionType && ACTION_COLORS[actionType]) {
+    return ACTION_COLORS[actionType];
+  }
+  return ACTION_COLORS.callout;
+}
+
+async function presentCuaAction({ action, summary, frame, actionTypeOverride, calloutText, calloutType }) {
+  const actionTypeName = actionTypeOverride || (action && action.type ? action.type : null);
+  const requiresPointer = ['click', 'double_click', 'drag', 'pinpoint'].includes(actionTypeName);
+  const hasDragPath = actionTypeName === 'drag' && Array.isArray(action?.path) && action.path.length > 1;
+
+  let startPoint = { x: action?.x, y: action?.y };
+  let endPoint = { x: action?.x2 ?? action?.end_x ?? action?.endX, y: action?.y2 ?? action?.end_y ?? action?.endY };
+  if (hasDragPath) {
+    startPoint = action.path[0];
+    endPoint = action.path[action.path.length - 1];
+  }
+
+  if (!action || (requiresPointer && !hasDragPath && (typeof startPoint.x !== 'number' || typeof startPoint.y !== 'number'))) {
+    const fallbackText = calloutText || buildCalloutText(summary);
     await window.electronAPI.showCallout({
-      heading: 'Task Completed',
-      body: 'Task completed.',
-      borderColor: ACTION_COLORS.completed,
-      headingColor: ACTION_COLORS.completed,
+      heading: 'Call Out',
+      body: fallbackText,
+      borderColor: ACTION_COLORS.callout,
+      headingColor: ACTION_COLORS.callout,
       x: -1,
       y: -1,
-      showNext: false,
-      showComplete: true,
-      glowColor: ACTION_COLORS.completed,
+      showNext: true,
       allowClickThrough: true
     });
-    clearTargetRect();
-    clearCurrentAction();
-    await window.electronAPI.hideElementHighlight();
-    return { action: null, summary, hasPointer: false, actionType: 'completed' };
+    lastCalloutPayload = {
+      heading: 'Call Out',
+      body: fallbackText,
+      borderColor: ACTION_COLORS.callout,
+      headingColor: ACTION_COLORS.callout,
+      x: -1,
+      y: -1,
+      showNext: true,
+      allowClickThrough: true
+    };
+    pendingAction = false;
+    return { action: null, summary, hasPointer: false, actionType: 'callout' };
   }
-  const hasDragPath = actionTypeName === 'drag' && Array.isArray(action?.path) && action.path.length > 1;
-  if (!action || (requiresPointer && !hasDragPath && (typeof action.x !== 'number' || typeof action.y !== 'number'))) {
-    if (hasScreenshotOnlyAction(action) && !strict) {
-      return runCuaOnce(question, frame, true);
-    }
-
-    const fallbackText = hasScreenshotOnlyAction(action)
-      ? 'CUA returned a screenshot only. Please try asking again.'
-      : calloutText;
-      await window.electronAPI.showCallout({
-        heading: 'Call Out',
-        body: fallbackText,
-        borderColor: ACTION_COLORS.callout,
-        headingColor: ACTION_COLORS.callout,
-        x: -1,
-        y: -1,
-        showNext: true,
-        allowClickThrough: true
-      });
-      return { action: null, summary, hasPointer: false, actionType: 'callout' };
-    }
 
   const displayInfo = await window.electronAPI.getSharedDisplayBounds();
   if (!displayInfo || !displayInfo.bounds) {
@@ -283,31 +241,19 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     x: displayInfo.bounds.x * scaleFactor,
     y: displayInfo.bounds.y * scaleFactor
   };
-  let absX = -1;
-  let absY = -1;
-  let dipX = -1;
-  let dipY = -1;
-  let localX = -1;
-  let localY = -1;
-  let startPoint = { x: action?.x, y: action?.y };
-  let endPoint = { x: action?.x2 ?? action?.end_x ?? action?.endX, y: action?.y2 ?? action?.end_y ?? action?.endY };
-  if (actionTypeName === 'drag' && Array.isArray(action.path) && action.path.length > 1) {
-    startPoint = action.path[0];
-    endPoint = action.path[action.path.length - 1];
-  }
-  if (requiresPointer && typeof startPoint.x === 'number' && typeof startPoint.y === 'number') {
-    const mapped = mapImageCoordsToDisplay(
-      { x: startPoint.x, y: startPoint.y },
-      { width: frame.width, height: frame.height },
-      displayInfo
-    );
-    absX = mapped.absX;
-    absY = mapped.absY;
-    dipX = Math.round((absX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
-    dipY = Math.round((absY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y);
-    localX = Math.round(dipX - displayInfo.bounds.x);
-    localY = Math.round(dipY - displayInfo.bounds.y);
-  }
+
+  const mapped = mapImageCoordsToDisplay(
+    { x: startPoint.x, y: startPoint.y },
+    { width: frame.width, height: frame.height },
+    displayInfo
+  );
+
+  const absX = mapped.absX;
+  const absY = mapped.absY;
+  const dipX = Math.round((absX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
+  const dipY = Math.round((absY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y);
+  const localX = Math.round(dipX - displayInfo.bounds.x);
+  const localY = Math.round(dipY - displayInfo.bounds.y);
 
   const normalizedActionType = actionTypeName || 'click';
   const heading = normalizedActionType === 'double_click' ? 'Double click'
@@ -315,10 +261,11 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     : normalizedActionType === 'scroll' || normalizedActionType === 'scroll_up' || normalizedActionType === 'scroll_down' ? 'Scroll'
     : normalizedActionType === 'type' ? 'Type'
     : normalizedActionType === 'wait' ? 'Wait'
-    : normalizedActionType === 'drag' ?
-     'Drag'
+    : normalizedActionType === 'drag' ? 'Drag'
+    : normalizedActionType === 'pinpoint' ? 'Pinpoint'
     : 'Click';
-  const borderColor = ACTION_COLORS[normalizedActionType] || ACTION_COLORS.click;
+
+  const borderColor = resolveCalloutColor(calloutType, normalizedActionType);
   const headingColor = normalizedActionType === 'click' ? '#ffffff' : borderColor;
 
   const keys = [];
@@ -335,11 +282,9 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
   let endLocalX = -1;
   let endLocalY = -1;
   if (normalizedActionType === 'drag') {
-    const endX = endPoint?.x;
-    const endY = endPoint?.y;
-    if (typeof endX === 'number' && typeof endY === 'number') {
+    if (typeof endPoint?.x === 'number' && typeof endPoint?.y === 'number') {
       const { absX: endAbsX, absY: endAbsY } = mapImageCoordsToDisplay(
-        { x: endX, y: endY },
+        { x: endPoint.x, y: endPoint.y },
         { width: frame.width, height: frame.height },
         displayInfo
       );
@@ -350,17 +295,11 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     }
   }
 
-  const showNext = ['scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait'].includes(normalizedActionType);
-  const resolvedHeading = heading || 'Click';
-  let resolvedBody = calloutText || 'Click the highlighted item to continue.';
-  if (normalizedActionType === 'drag') {
-    const lower = resolvedBody.toLowerCase();
-    if (!lower.includes('drag') && !lower.includes('start') && !lower.includes('end')) {
-      resolvedBody = `${resolvedBody} Drag from the bright dot to the dim dot.`;
-    }
-  }
+  const showNext = ['scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait', 'pinpoint'].includes(normalizedActionType);
+  const resolvedBody = calloutText || buildCalloutText(summary);
+
   await window.electronAPI.showCallout({
-    heading: resolvedHeading,
+    heading,
     body: resolvedBody,
     borderColor,
     headingColor,
@@ -372,9 +311,23 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     showNext,
     allowClickThrough: true
   });
+  lastCalloutPayload = {
+    heading,
+    body: resolvedBody,
+    borderColor,
+    headingColor,
+    x: localX,
+    y: localY,
+    endX: endLocalX,
+    endY: endLocalY,
+    keys,
+    showNext,
+    allowClickThrough: true
+  };
 
-  const physicalX = absX >= 0 ? Math.round(absX) : null;
-  const physicalY = absY >= 0 ? Math.round(absY) : null;
+  const physicalX = Math.round(absX);
+  const physicalY = Math.round(absY);
+
   currentAction = {
     type: normalizedActionType,
     x: physicalX,
@@ -387,6 +340,9 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     dipY2: endDipY,
     keys
   };
+
+  lastCuaSummary = summary || lastCuaSummary;
+  pendingAction = normalizedActionType !== 'callout';
 
   if (physicalX !== null && physicalY !== null) {
     const element = await window.electronAPI.detectElementAtPoint(physicalX, physicalY);
@@ -407,6 +363,159 @@ ${historyText ? `Previous responses:\n${historyText}\n` : ''}
     }
   }
 
-  const hasPointer = ['click', 'double_click', 'drag'].includes(normalizedActionType);
-  return { action, summary, element, hasPointer, actionType: normalizedActionType };
+  const hasPointer = ['click', 'double_click', 'drag', 'pinpoint'].includes(normalizedActionType);
+  return { action, summary, element: null, hasPointer, actionType: normalizedActionType };
+}
+
+export async function runCuaQuestion(question, options = {}) {
+  if (!question && !options.allowEmpty) {
+    throw new Error('Enter a question first.');
+  }
+
+  const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 0;
+  const captureDelayMs = Number.isFinite(options.captureDelayMs) ? options.captureDelayMs : 200;
+  await window.electronAPI.setLoadingState(true);
+  try {
+    await window.electronAPI.setWidgetVisible(true);
+    await window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
+    await window.electronAPI.hideElementHighlight();
+    clearTargetRect();
+    clearCurrentAction();
+
+    let frame;
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    if (captureDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
+    }
+    await waitForFreshVideoFrame();
+    await waitForFreshVideoFrame();
+    frame = captureFrame();
+
+    if (!frame) {
+      throw new Error('Failed to capture screen frame.');
+    }
+
+    if (question) {
+      pushConversation('user', question);
+    }
+    const reasonerContext = {
+      user_message: question || '',
+      conversation_history: conversationHistory,
+      allow_parallel_pinpoint: true,
+      last_cua_suggestion: lastCuaSummary || null
+    };
+    if (options.mode) {
+      reasonerContext.mode = options.mode;
+    }
+    if (options.userStatus) {
+      reasonerContext.user_status = options.userStatus;
+    }
+
+    const reasonerStart = Date.now();
+    const reasonerImage = frame.reasonerDataUrl || frame.dataUrl;
+    const reasonerResponse = await window.electronAPI.runReasonerQuestion({
+      context: reasonerContext,
+      imageDataUrl: reasonerImage
+    });
+    const reasonerDurationMs = Date.now() - reasonerStart;
+    const reasonerJson = extractReasonerJson(reasonerResponse);
+    const suppressCallout = typeof reasonerJson.answer === 'string'
+      && reasonerJson.answer.includes('<<TASK_COMPLETED>>');
+
+    if (reasonerJson.answer) {
+      pushConversation('assistant', reasonerJson.answer);
+    }
+
+    const cuaCalls = Array.isArray(reasonerJson.cua_calls) ? reasonerJson.cua_calls : [];
+    const calloutOnly = cuaCalls.length === 0;
+
+    let result = { action: null, summary: null, hasPointer: false, actionType: 'callout' };
+    const cuaResponses = [];
+
+    if (calloutOnly) {
+      if (suppressCallout) {
+        pendingAction = false;
+      } else {
+      if (reasonerJson.callout && reasonerJson.callout.text && reasonerJson.callout.text !== 'none') {
+        const calloutColor = resolveCalloutColor(reasonerJson.callout.type, null);
+        const payload = {
+          heading: 'Call Out',
+          body: reasonerJson.callout.text,
+          borderColor: calloutColor,
+          headingColor: calloutColor,
+          x: -1,
+          y: -1,
+          showNext: true,
+          allowClickThrough: true
+        };
+        await window.electronAPI.showCallout(payload);
+        lastCalloutPayload = payload;
+      }
+      pendingAction = false;
+      }
+    } else {
+      const filteredCalls = cuaCalls.length > 1
+        ? cuaCalls.filter((call) => call.action === 'pinpoint')
+        : cuaCalls;
+
+      const cuaResults = await Promise.all(
+        filteredCalls.map((call) => runCuaInstruction({ call, frame, strict: false }))
+      );
+
+      cuaResults.forEach((item) => {
+        cuaResponses.push({ response: item.response, durationMs: getDurationMs(item.response) });
+      });
+
+      const primary = cuaResults[0];
+      const primaryCall = filteredCalls[0];
+      if (primary) {
+        const actionCalloutText = primaryCall['action-callout'] || (reasonerJson.callout ? reasonerJson.callout.text : null);
+        result = await presentCuaAction({
+          action: primary.action,
+          summary: primary.summary,
+          frame,
+          actionTypeOverride: primaryCall.action,
+          calloutText: actionCalloutText,
+          calloutType: reasonerJson.callout ? reasonerJson.callout.type : null
+        });
+      }
+
+      if (cuaResults.length > 1) {
+        queuedActions = cuaResults.slice(1).map((item, index) => ({
+          action: item.action,
+          summary: item.summary,
+          actionTypeOverride: filteredCalls[index + 1].action,
+          calloutText: filteredCalls[index + 1]['action-callout'] || (reasonerJson.callout ? reasonerJson.callout.text : null),
+          calloutType: reasonerJson.callout ? reasonerJson.callout.type : null
+        }));
+        queuedFrame = frame;
+      } else {
+        queuedActions = [];
+        queuedFrame = null;
+      }
+    }
+
+    if (question) {
+      addHistoryItem({
+        question,
+        screenshot: frame.dataUrl,
+        reasonerResponse: reasonerResponse,
+        reasonerDurationMs,
+        cuaResponses
+      });
+    }
+
+    return {
+      answer: reasonerJson.answer || null,
+      action: result.action,
+      summary: result.summary,
+      hasPointer: result.hasPointer,
+      actionType: result.actionType,
+      reasoner: reasonerJson
+    };
+  } finally {
+    await window.electronAPI.setLoadingState(false);
+  }
 }
