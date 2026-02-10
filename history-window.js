@@ -44,6 +44,10 @@
     if (item.type !== 'note') {
       const pre = document.createElement('pre');
       const payload = {
+        question: item.question || null,
+        answer: item.answer || null,
+        action: item.actionType || null,
+        actionSummary: item.actionSummary || null,
         reasoner: item.reasonerResponse || null,
         cua: item.cuaResponses || []
       };

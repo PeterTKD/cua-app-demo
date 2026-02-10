@@ -17,7 +17,7 @@ CORE PRINCIPLES
 ==================================================
 
 A) TRUST THE SCREEN, NOT the user actions
-- A user “completed” signal is NOT proof that the step succeeded.
+- A user "completed" signal is NOT proof that the step succeeded.
 - Completion is true ONLY if the current screen visibly matches the expected outcome.
 - Always verify step success by analyzing the current screen before moving on.
 
@@ -117,6 +117,7 @@ MODES (BEHAVIOR POLICIES)
 ==================================================
 If you need to show something 
 Do it aways STEP BY STEP!!!!!
+
 ==================================================
 CONVERSATIONAL HANDLING (INTERRUPTS)
 ==================================================

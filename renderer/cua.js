@@ -298,7 +298,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   const showNext = ['scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait', 'pinpoint'].includes(normalizedActionType);
   const resolvedBody = calloutText || buildCalloutText(summary);
 
-  await window.electronAPI.showCallout({
+  const calloutPromise = window.electronAPI.showCallout({
     heading,
     body: resolvedBody,
     borderColor,
@@ -344,23 +344,32 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   lastCuaSummary = summary || lastCuaSummary;
   pendingAction = normalizedActionType !== 'callout';
 
+  let highlightPromise = null;
   if (physicalX !== null && physicalY !== null) {
-    const element = await window.electronAPI.detectElementAtPoint(physicalX, physicalY);
-    if (element && element.BoundingRect) {
-      currentTargetRect = {
-        x: element.BoundingRect.X,
-        y: element.BoundingRect.Y,
-        width: element.BoundingRect.Width,
-        height: element.BoundingRect.Height
-      };
-      await window.electronAPI.showElementHighlight(
-        element.BoundingRect.X,
-        element.BoundingRect.Y,
-        element.BoundingRect.Width,
-        element.BoundingRect.Height,
-        '#f59e0b'
-      );
-    }
+    highlightPromise = (async () => {
+      const element = await window.electronAPI.detectElementAtPoint(physicalX, physicalY);
+      if (element && element.BoundingRect) {
+        currentTargetRect = {
+          x: element.BoundingRect.X,
+          y: element.BoundingRect.Y,
+          width: element.BoundingRect.Width,
+          height: element.BoundingRect.Height
+        };
+        await window.electronAPI.showElementHighlight(
+          element.BoundingRect.X,
+          element.BoundingRect.Y,
+          element.BoundingRect.Width,
+          element.BoundingRect.Height,
+          '#f59e0b'
+        );
+      }
+    })();
+  }
+
+  if (highlightPromise) {
+    await Promise.allSettled([calloutPromise, highlightPromise]);
+  } else {
+    await calloutPromise;
   }
 
   const hasPointer = ['click', 'double_click', 'drag', 'pinpoint'].includes(normalizedActionType);
@@ -497,15 +506,17 @@ export async function runCuaQuestion(question, options = {}) {
       }
     }
 
-    if (question) {
-      addHistoryItem({
-        question,
-        screenshot: frame.dataUrl,
-        reasonerResponse: reasonerResponse,
-        reasonerDurationMs,
-        cuaResponses
-      });
-    }
+    const historyQuestion = question || '(auto)';
+    addHistoryItem({
+      question: historyQuestion,
+      screenshot: frame.dataUrl,
+      answer: reasonerJson.answer || null,
+      actionType: result.actionType || null,
+      actionSummary: result.summary || null,
+      reasonerResponse: reasonerResponse,
+      reasonerDurationMs,
+      cuaResponses
+    });
 
     return {
       answer: reasonerJson.answer || null,

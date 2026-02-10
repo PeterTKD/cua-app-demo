@@ -213,7 +213,13 @@ function completeStep(message) {
   addConversationNote('User Completed The Action');
   addSystemMessage('Action Completed');
   setTimeout(() => {
-    handleAsk({ delayMs: 2000, auto: true, userStatus: 'Action Criteria Met', allowEmpty: true });
+    handleAsk({
+      delayMs: 2000,
+      auto: true,
+      userStatus: 'Action Criteria Met',
+      allowEmpty: true,
+      emptyInput: true
+    });
   }, 1000);
 }
 
@@ -315,7 +321,9 @@ function resolveQuestion(mode, forceLast = false) {
 }
 
 async function handleAsk(options = {}) {
-  const question = resolveQuestion(options.mode, options.auto === true);
+  const question = options.emptyInput === true
+    ? ''
+    : resolveQuestion(options.mode, options.forceLast === true);
   if (!question && !options.allowEmpty) {
     setStatus('Type a question before asking.', 'error');
     return;
@@ -351,9 +359,7 @@ async function handleAsk(options = {}) {
     setStatus('Sending question to CUA...', 'default');
     isRunningCua = true;
     if (question) {
-      if (question) {
       lastQuestion = question;
-    }
     }
     const result = await runCuaQuestion(question, options);
     if (result && result.answer) {

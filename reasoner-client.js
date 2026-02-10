@@ -3,6 +3,7 @@ const path = require('path');
 
 const DEFAULT_REASONER_ENDPOINT = process.env.REASONER_ENDPOINT || 'https://api.openai.com/v1/responses';
 const REASONER_MODEL = process.env.REASONER_MODEL || 'gpt-5.2';
+// Change the prompt path as needed
 const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.1', 'reasoner.txt');
 
 function loadReasonerPrompt() {
