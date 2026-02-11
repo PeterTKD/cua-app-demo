@@ -10,6 +10,23 @@
     return;
   }
 
+  const extractUsageTotals = (response) => {
+    if (!response) {
+      return null;
+    }
+    const usage = response.usage || response?.usage_metadata || null;
+    if (!usage || (usage.total_tokens == null && usage.input_tokens == null && usage.output_tokens == null)) {
+      return null;
+    }
+    const input = Number(usage.input_tokens ?? 0);
+    const output = Number(usage.output_tokens ?? 0);
+    const total = Number(usage.total_tokens ?? (input + output));
+    return { input, output, total };
+  };
+
+  const formatMs = (value) => (Number.isFinite(value) ? `${Math.round(value)} ms` : 'n/a');
+  const formatTokens = (value) => (Number.isFinite(value) ? String(Math.round(value)) : 'n/a');
+
   items.forEach((item) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'item';
@@ -26,11 +43,36 @@
     if (item.type === 'note') {
       meta.textContent = 'note';
     } else {
-      const reasonerDuration = item.reasonerDurationMs ? `${Math.round(item.reasonerDurationMs)} ms` : 'n/a';
+      const reasonerDuration = formatMs(item.reasonerDurationMs);
       const cuaDurations = Array.isArray(item.cuaResponses)
-        ? item.cuaResponses.map((entry, idx) => `CUA ${idx + 1}: ${entry.durationMs ? Math.round(entry.durationMs) : 'n/a'} ms`).join(' | ')
+        ? item.cuaResponses.map((entry, idx) => `CUA ${idx + 1}: ${formatMs(entry.durationMs)}`).join(' | ')
         : 'CUA: n/a';
-      meta.textContent = `reasoner: ${reasonerDuration} - ${cuaDurations}`;
+
+      const reasonerUsage = extractUsageTotals(item.reasonerResponse);
+      const reasonerTokens = reasonerUsage ? formatTokens(reasonerUsage.total) : 'n/a';
+
+      let cuaTotalTokens = 0;
+      let cuaHasTokens = false;
+      if (Array.isArray(item.cuaResponses)) {
+        item.cuaResponses.forEach((entry) => {
+          const usage = extractUsageTotals(entry?.response);
+          if (usage) {
+            cuaHasTokens = true;
+            cuaTotalTokens += usage.total;
+          }
+        });
+      }
+      const cuaTokens = cuaHasTokens ? formatTokens(cuaTotalTokens) : 'n/a';
+
+      const totalRuntimeMs = (Number(item.reasonerDurationMs) || 0)
+        + (Array.isArray(item.cuaResponses)
+          ? item.cuaResponses.reduce((sum, entry) => sum + (Number(entry.durationMs) || 0), 0)
+          : 0);
+      const totalTokens = cuaHasTokens && reasonerUsage
+        ? formatTokens(cuaTotalTokens + reasonerUsage.total)
+        : 'n/a';
+
+      meta.textContent = `reasoner: ${reasonerDuration} (${reasonerTokens} tokens) - ${cuaDurations} (${cuaTokens} tokens) - total: ${formatMs(totalRuntimeMs)} (${totalTokens} tokens)`;
     }
 
     if (item.screenshot) {

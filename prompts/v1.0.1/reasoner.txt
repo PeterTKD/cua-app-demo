@@ -95,8 +95,8 @@ Allowed:
 - scroll
 - scroll_up
 - scroll_down
-- keypress
-- type
+- keypress // used to give the user key combination or a single key to press
+- type // used to give the user guidance on what to type
 - wait
 - pinpoint
 No other actions are permitted.

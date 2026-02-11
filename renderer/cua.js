@@ -328,6 +328,12 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   const physicalX = Math.round(absX);
   const physicalY = Math.round(absY);
 
+  // Start element detection immediately in parallel (optimization #9)
+  let elementDetectionPromise = null;
+  if (requiresPointer && physicalX !== null && physicalY !== null) {
+    elementDetectionPromise = window.electronAPI.detectElementAtPoint(physicalX, physicalY);
+  }
+
   currentAction = {
     type: normalizedActionType,
     x: physicalX,
@@ -345,9 +351,9 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   pendingAction = normalizedActionType !== 'callout';
 
   let highlightPromise = null;
-  if (physicalX !== null && physicalY !== null) {
+  if (elementDetectionPromise) {
     highlightPromise = (async () => {
-      const element = await window.electronAPI.detectElementAtPoint(physicalX, physicalY);
+      const element = await elementDetectionPromise;
       if (element && element.BoundingRect) {
         currentTargetRect = {
           x: element.BoundingRect.X,

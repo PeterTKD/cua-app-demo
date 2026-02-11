@@ -151,10 +151,10 @@ function clearChatLog() {
 }
 
 function setTaskButtonsEnabled(enabled) {
-  elements.diffMethodButton.disabled = !enabled;
-  elements.pointElementButton.disabled = !enabled;
-  elements.historyButton.disabled = !enabled;
-  elements.nextButton.disabled = !enabled;
+  if (elements.diffMethodButton) elements.diffMethodButton.disabled = !enabled;
+  if (elements.pointElementButton) elements.pointElementButton.disabled = !enabled;
+  if (elements.historyButton) elements.historyButton.disabled = !enabled;
+  if (elements.nextButton) elements.nextButton.disabled = !enabled;
 }
 
 let lastQuestion = '';
@@ -425,19 +425,28 @@ async function handleSelectScreen() {
 }
 
 function bindEvents() {
-  elements.askButton.addEventListener('click', handleAsk);
-  elements.questionInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      handleAsk();
-    }
-  });
+  if (elements.askButton) {
+    elements.askButton.addEventListener('click', handleAsk);
+  }
+  if (elements.questionInput) {
+    elements.questionInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        handleAsk();
+      }
+    });
+  }
 
-  elements.selectScreenButton.addEventListener('click', handleSelectScreen);
-  elements.historyButton.addEventListener('click', async () => {
-    const snapshot = getHistorySnapshot();
-    await window.electronAPI.openHistoryWindow(snapshot);
-  });
-  elements.diffMethodButton.addEventListener('click', async () => {
+  if (elements.selectScreenButton) {
+    elements.selectScreenButton.addEventListener('click', handleSelectScreen);
+  }
+  if (elements.historyButton) {
+    elements.historyButton.addEventListener('click', async () => {
+      const snapshot = getHistorySnapshot();
+      await window.electronAPI.openHistoryWindow(snapshot);
+    });
+  }
+  if (elements.diffMethodButton) {
+    elements.diffMethodButton.addEventListener('click', async () => {
     if (isRunningCua) {
       return;
     }
@@ -448,8 +457,10 @@ function bindEvents() {
     }
     elements.questionInput.value = question;
     await handleAsk({ delayMs: 2000, mode: 'diff_method' });
-  });
-  elements.pointElementButton.addEventListener('click', async () => {
+    });
+  }
+  if (elements.pointElementButton) {
+    elements.pointElementButton.addEventListener('click', async () => {
     if (isRunningCua) {
       return;
     }
@@ -460,8 +471,10 @@ function bindEvents() {
     }
     elements.questionInput.value = question;
     await handleAsk({ delayMs: 2000, mode: 'point' });
-  });
-  elements.nextButton.addEventListener('click', async () => {
+    });
+  }
+  if (elements.nextButton) {
+    elements.nextButton.addEventListener('click', async () => {
     if (!lastQuestion || isRunningCua) {
       return;
     }
@@ -472,7 +485,8 @@ function bindEvents() {
     }
     elements.questionInput.value = lastQuestion;
     await handleAsk({ delayMs: 2000, auto: true, forceLast: true });
-  });
+    });
+  }
   window.electronAPI.onOverlayNext(() => {
     if (!lastQuestion || isRunningCua) {
       return;
@@ -488,9 +502,11 @@ function bindEvents() {
   window.electronAPI.onCalloutComplete(() => {
     completeTaskAndReset();
   });
-  elements.closeButton.addEventListener('click', () => {
-    window.electronAPI.closeApp();
-  });
+  if (elements.closeButton) {
+    elements.closeButton.addEventListener('click', () => {
+      window.electronAPI.closeApp();
+    });
+  }
 
   window.addEventListener('keydown', (event) => {
     if (event.key === 'q' && (event.ctrlKey || event.metaKey)) {
@@ -588,7 +604,7 @@ function bindEvents() {
   window.electronAPI.onOSKeyDown((event, data) => {
     const action = getCurrentAction();
     if (!action) return;
-    if (['keypress', 'type'].includes(action.type)) {
+    if (action.type === 'keypress') {
       if (Array.isArray(action.keys) && action.keys.length > 1) {
         const now = Date.now();
         if (matchesKeyCombo(action.keys, data)) {
