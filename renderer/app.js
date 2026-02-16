@@ -103,8 +103,53 @@ function renderMarkdown(value) {
   return html;
 }
 
+let activeStreamInterval = null;
+
+function streamTextIntoBubble(bubble, message, onDone) {
+  const chars = Array.from(message);
+  let index = 0;
+  const chunkSize = 2;
+  const intervalMs = 12;
+  let resizeTick = 0;
+
+  bubble.classList.add('streaming');
+  bubble.innerHTML = '';
+
+  activeStreamInterval = setInterval(() => {
+    const end = Math.min(index + chunkSize, chars.length);
+    const partial = chars.slice(0, end).join('');
+    bubble.innerHTML = renderMarkdown(partial);
+    index = end;
+    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+
+    resizeTick += 1;
+    if (resizeTick % 5 === 0) {
+      requestWidgetResize();
+    }
+
+    if (index >= chars.length) {
+      clearInterval(activeStreamInterval);
+      activeStreamInterval = null;
+      bubble.classList.remove('streaming');
+      if (onDone) onDone();
+    }
+  }, intervalMs);
+}
+
+function finishActiveStream() {
+  if (activeStreamInterval) {
+    clearInterval(activeStreamInterval);
+    activeStreamInterval = null;
+    const streaming = elements.chatLog?.querySelector('.chat-bubble.streaming');
+    if (streaming) {
+      streaming.classList.remove('streaming');
+    }
+  }
+}
+
 function addChatMessage(message, role) {
   if (!elements.chatLog) return;
+  finishActiveStream();
   if (role === 'assistant' && typeof message === 'string' && message.includes('<<TASK_COMPLETED>>')) {
     addSystemMessage('<<TASK_COMPLETED>> Task Completed');
     const cleaned = message.replace('<<TASK_COMPLETED>>', '').replace(/^\s+/, '').trim();
@@ -113,20 +158,28 @@ function addChatMessage(message, role) {
     }
     const bubble = document.createElement('div');
     bubble.className = 'chat-bubble assistant';
-    bubble.innerHTML = renderMarkdown(cleaned);
     elements.chatLog.appendChild(bubble);
-    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
     updateChatLayout();
     requestWidgetResize();
+    streamTextIntoBubble(bubble, cleaned, () => requestWidgetResize());
     return;
   }
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${role === 'user' ? 'user' : 'assistant'}`;
-  bubble.innerHTML = renderMarkdown(message);
-  elements.chatLog.appendChild(bubble);
-  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-  updateChatLayout();
-  requestWidgetResize();
+
+  if (role === 'assistant') {
+    elements.chatLog.appendChild(bubble);
+    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+    updateChatLayout();
+    requestWidgetResize();
+    streamTextIntoBubble(bubble, message, () => requestWidgetResize());
+  } else {
+    bubble.innerHTML = renderMarkdown(message);
+    elements.chatLog.appendChild(bubble);
+    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+    updateChatLayout();
+    requestWidgetResize();
+  }
 }
 
 function addSystemMessage(text) {
@@ -157,6 +210,171 @@ function setTaskButtonsEnabled(enabled) {
   if (elements.nextButton) elements.nextButton.disabled = !enabled;
 }
 
+function getFollowupDelayMs() {
+  return appMode === APP_MODES.GUIDE ? 250 : 2000;
+}
+
+function setGuideProcessActive(active) {
+  const wasActive = isGuideProcessActive;
+  isGuideProcessActive = Boolean(active);
+  if (!isGuideProcessActive) {
+    guideProcessEpoch += 1;
+  }
+  if (elements.widget) {
+    elements.widget.classList.toggle('guide-process-active', isGuideProcessActive);
+
+    if (isGuideProcessActive && !wasActive) {
+      elements.widget.classList.remove('chat-entering');
+      elements.widget.classList.add('focus-entering');
+      elements.widget.addEventListener('animationend', () => {
+        elements.widget.classList.remove('focus-entering');
+      }, { once: true });
+    } else if (!isGuideProcessActive && wasActive) {
+      elements.widget.classList.remove('focus-entering');
+      elements.widget.classList.add('chat-entering');
+      elements.widget.addEventListener('animationend', () => {
+        elements.widget.classList.remove('chat-entering');
+      }, { once: true });
+    }
+  }
+  requestWidgetResize();
+  setTimeout(() => requestWidgetResize(), 50);
+  setTimeout(() => requestWidgetResize(), 200);
+  setTimeout(() => requestWidgetResize(), 450);
+}
+
+function updateModeUI() {
+  const isGuide = appMode === APP_MODES.GUIDE;
+  if (elements.modeBadge) {
+    elements.modeBadge.textContent = isGuide ? 'Focus' : 'Chat';
+  }
+  if (elements.askButton) {
+    elements.askButton.textContent = 'Send';
+  }
+  if (elements.questionInput) {
+    elements.questionInput.placeholder = isGuide
+      ? 'Optional goal (automatic focus when task is active)'
+      : 'Ask anything about this screen';
+  }
+}
+
+const GUIDE_INTENT_PATTERNS = [
+  /\b(click|double click|tap|press|select|choose|open|go to|navigate|scroll|drag|type|fill|enter)\b/i,
+  /\b(where is|show me|point to|highlight|walk me through|step by step|guide me|help me do)\b/i,
+  /\b(on this screen|in this app|next step|what should i do next)\b/i
+];
+
+const CHAT_INTENT_PATTERNS = [
+  /\b(explain|why|what is|how does|difference between|compare|summarize|definition)\b/i,
+  /\b(brainstorm|ideas|pros and cons|best practice|recommend)\b/i,
+  /\?/
+];
+
+function inferModeFromQuestion(question) {
+  const text = String(question || '').trim();
+  if (!text) {
+    return appMode;
+  }
+
+  let guideScore = 0;
+  let chatScore = 0;
+
+  GUIDE_INTENT_PATTERNS.forEach((pattern) => {
+    if (pattern.test(text)) {
+      guideScore += 1;
+    }
+  });
+  CHAT_INTENT_PATTERNS.forEach((pattern) => {
+    if (pattern.test(text)) {
+      chatScore += 1;
+    }
+  });
+
+  if (guideScore > chatScore) return APP_MODES.GUIDE;
+  if (chatScore > guideScore) return APP_MODES.CHAT;
+  return appMode;
+}
+
+function resolveAutoMode(options, question) {
+  if (options.mode === APP_MODES.GUIDE || options.mode === APP_MODES.CHAT) {
+    return options.mode;
+  }
+  if (options.mode === 'diff_method' || options.mode === 'point') {
+    return APP_MODES.GUIDE;
+  }
+  if (options.auto === true || hasPendingAction() || getCurrentAction()) {
+    return APP_MODES.GUIDE;
+  }
+  return inferModeFromQuestion(question);
+}
+
+function isGuidanceActionType(actionType) {
+  return ['click', 'double_click', 'drag', 'scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait'].includes(actionType);
+}
+
+async function startGuideKickoff(force = false) {
+  if (appMode !== APP_MODES.GUIDE || isRunningCua) {
+    return;
+  }
+  if (hasGuideKickoffStarted && !force) {
+    return;
+  }
+  const bounds = await window.electronAPI.getSharedDisplayBounds();
+  if (!bounds || !bounds.bounds) {
+    setGuideProcessActive(false);
+    setStatus('Focus mode ready. Select a screen to begin.', 'default');
+    return;
+  }
+  hasGuideKickoffStarted = true;
+  await handleAsk({
+    auto: true,
+    allowEmpty: true,
+    emptyInput: true,
+    mode: APP_MODES.GUIDE,
+    delayMs: 0,
+    captureDelayMs: 0,
+    fastCapture: true
+  });
+}
+
+function setAppMode(mode, options = {}) {
+  const { announce = true, triggerGuide = true } = options;
+  if (!Object.values(APP_MODES).includes(mode)) {
+    return;
+  }
+  if (mode === appMode) {
+    updateModeUI();
+    if (mode === APP_MODES.GUIDE && triggerGuide) {
+      startGuideKickoff(true).catch((error) => {
+        setStatus(error.message || 'Failed to start focus mode.', 'error');
+      });
+    }
+    return;
+  }
+  appMode = mode;
+  hasGuideKickoffStarted = false;
+  if (mode !== APP_MODES.GUIDE) {
+    setGuideProcessActive(false);
+  }
+  updateModeUI();
+  if (mode === APP_MODES.GUIDE) {
+    if (announce) {
+      addSystemMessage('Focus mode active.');
+    }
+    if (triggerGuide) {
+      startGuideKickoff(true).catch((error) => {
+        setStatus(error.message || 'Failed to start focus mode.', 'error');
+      });
+    }
+  } else {
+    if (announce) {
+      addSystemMessage('Chat mode active.');
+    }
+    setStatus('Chat mode active. Ask your question.', 'default');
+  }
+  requestWidgetResize();
+}
+
 let lastQuestion = '';
 let isRunningCua = false;
 let lastClickTime = 0;
@@ -164,9 +382,20 @@ let lastClickPoint = null;
 let dragArmed = false;
 let lastKeydownAt = 0;
 let resizeRaf = null;
+let appMode = 'guide';
+let hasGuideKickoffStarted = false;
+let isGuideProcessActive = false;
+let guideProcessEpoch = 0;
 
 const POSITION_TOLERANCE = 20;
 const DOUBLE_CLICK_WINDOW_MS = 550;
+const APP_MODES = {
+  GUIDE: 'guide',
+  CHAT: 'chat'
+};
+
+const CHAT_WIDTH = 420;
+const FOCUS_WIDTH = 350;
 
 function requestWidgetResize() {
   if (!elements.widget || !window.electronAPI?.resizeWidget) {
@@ -178,7 +407,9 @@ function requestWidgetResize() {
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = null;
     const padding = 48;
-    const width = Math.ceil(elements.widget.scrollWidth + padding);
+    const isFocus = elements.widget.classList.contains('guide-process-active');
+    const targetWidth = isFocus ? FOCUS_WIDTH : CHAT_WIDTH;
+    const width = Math.max(targetWidth, Math.ceil(elements.widget.scrollWidth + padding));
     const height = Math.ceil(elements.widget.scrollHeight + padding);
     window.electronAPI.resizeWidget({ width, height });
   });
@@ -212,15 +443,23 @@ function completeStep(message) {
   addHistoryNote('User Completed The Action');
   addConversationNote('User Completed The Action');
   addSystemMessage('Action Completed');
+  const followupDelayMs = appMode === APP_MODES.GUIDE ? 250 : 2000;
+  const settleDelayMs = appMode === APP_MODES.GUIDE ? 250 : 1000;
+  const stepEpoch = guideProcessEpoch;
   setTimeout(() => {
+    if (stepEpoch !== guideProcessEpoch) {
+      return;
+    }
     handleAsk({
-      delayMs: 2000,
+      delayMs: followupDelayMs,
       auto: true,
       userStatus: 'Action Criteria Met',
       allowEmpty: true,
-      emptyInput: true
+      emptyInput: true,
+      mode: appMode,
+      fastCapture: appMode === APP_MODES.GUIDE
     });
-  }, 1000);
+  }, settleDelayMs);
 }
 
 function normalizeKeyName(value) {
@@ -303,6 +542,7 @@ function completeTaskAndReset() {
   lastQuestion = '';
   elements.questionInput.value = '';
   setStatus('Task completed. Ready for a new question.', 'success');
+  setGuideProcessActive(false);
   clearChatLog();
   window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
   window.electronAPI.hideElementHighlight();
@@ -314,7 +554,8 @@ function resolveQuestion(mode, forceLast = false) {
   if (inputValue) {
     return inputValue;
   }
-  if ((mode || forceLast) && lastQuestion) {
+  const shouldReuseLast = forceLast || mode === 'diff_method' || mode === 'point';
+  if (shouldReuseLast && lastQuestion) {
     return lastQuestion;
   }
   return '';
@@ -324,7 +565,12 @@ async function handleAsk(options = {}) {
   const question = options.emptyInput === true
     ? ''
     : resolveQuestion(options.mode, options.forceLast === true);
-  if (!question && !options.allowEmpty) {
+  const activeMode = resolveAutoMode(options, question);
+  if (activeMode !== appMode) {
+    setAppMode(activeMode, { announce: false, triggerGuide: false });
+  }
+  const allowEmpty = options.allowEmpty === true || activeMode === APP_MODES.GUIDE;
+  if (!question && !allowEmpty) {
     setStatus('Type a question before asking.', 'error');
     return;
   }
@@ -356,20 +602,51 @@ async function handleAsk(options = {}) {
       await ensureVideoReady();
       await waitForDisplayBounds();
     }
-    setStatus('Sending question to CUA...', 'default');
+    setStatus(activeMode === APP_MODES.GUIDE ? 'Analyzing screen...' : 'Sending question to CUA...', 'default');
     isRunningCua = true;
     if (question) {
       lastQuestion = question;
     }
-    const result = await runCuaQuestion(question, options);
+    const runOptions = {
+      ...options,
+      mode: activeMode,
+      allowEmpty
+    };
+    if (activeMode === APP_MODES.GUIDE) {
+      if (!Number.isFinite(runOptions.delayMs)) {
+        runOptions.delayMs = 0;
+      }
+      if (!Number.isFinite(runOptions.captureDelayMs)) {
+        runOptions.captureDelayMs = 0;
+      }
+      runOptions.fastCapture = true;
+    }
+    const result = await runCuaQuestion(question, runOptions);
     if (result && result.answer) {
       addChatMessage(result.answer, 'assistant');
+    }
+    if (result && isGuidanceActionType(result.actionType)) {
+      if (appMode !== APP_MODES.GUIDE) {
+        setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });
+      }
+      setGuideProcessActive(true);
+    } else if (result && result.actionType === 'pinpoint') {
+      setGuideProcessActive(false);
+      setAppMode(APP_MODES.CHAT, { announce: false, triggerGuide: false });
+    } else {
+      setGuideProcessActive(false);
+      if (question && !hasPendingAction()) {
+        const inferredFromQuestion = inferModeFromQuestion(question);
+        if (appMode !== inferredFromQuestion) {
+          setAppMode(inferredFromQuestion, { announce: false, triggerGuide: false });
+        }
+      }
     }
     if (result && result.actionType === 'wait') {
       setStatus('Waiting...', 'default');
       setTimeout(() => {
         completeStep('Wait complete.');
-      }, 2000);
+      }, appMode === APP_MODES.GUIDE ? 300 : 2000);
       return;
     }
     if (result && result.actionType === 'callout') {
@@ -377,18 +654,38 @@ async function handleAsk(options = {}) {
       return;
     }
     if (result && result.hasPointer === false) {
-      setStatus('No pointer yet. Press Next to continue.', 'default');
-      if (lastQuestion && !isRunningCua) {
+      if (activeMode === APP_MODES.GUIDE) {
+        setStatus('No pointer yet. Continuing focus...', 'default');
+      } else {
+        setStatus('No pointer yet. Press Next to continue.', 'default');
+      }
+      if ((lastQuestion || activeMode === APP_MODES.GUIDE) && !isRunningCua) {
+        const delayMs = activeMode === APP_MODES.GUIDE ? 500 : 2000;
+        const followupEpoch = guideProcessEpoch;
         setTimeout(() => {
-          if (!isRunningCua) {
-            handleAsk({ delayMs: 2000, auto: true, forceLast: true });
+          if (followupEpoch !== guideProcessEpoch) {
+            return;
           }
-        }, 2000);
+          if (!isRunningCua) {
+            handleAsk({
+              delayMs: activeMode === APP_MODES.GUIDE ? 0 : 2000,
+              auto: true,
+              forceLast: activeMode !== APP_MODES.GUIDE,
+              allowEmpty: activeMode === APP_MODES.GUIDE,
+              emptyInput: activeMode === APP_MODES.GUIDE,
+              mode: activeMode,
+              fastCapture: activeMode === APP_MODES.GUIDE
+            });
+          }
+        }, delayMs);
       }
     } else {
       setStatus('CUA returned a pointer. UIA highlight updated.', 'success');
     }
   } catch (error) {
+    if (activeMode === APP_MODES.GUIDE) {
+      setGuideProcessActive(false);
+    }
     setStatus(error.message || 'Failed to run CUA.', 'error');
     addChatMessage(error.message || 'Failed to run CUA.', 'assistant');
   } finally {
@@ -418,7 +715,12 @@ async function handleSelectScreen() {
       setStatus('Screen selection canceled.', 'default');
       return;
     }
+    await ensureVideoReady();
+    await waitForDisplayBounds();
     setStatus('Screen sharing active.', 'success');
+    if (appMode === APP_MODES.GUIDE) {
+      await startGuideKickoff(true);
+    }
   } catch (error) {
     setStatus(error.message || 'Failed to share screen.', 'error');
   }
@@ -435,9 +737,21 @@ function bindEvents() {
       }
     });
   }
-
   if (elements.selectScreenButton) {
     elements.selectScreenButton.addEventListener('click', handleSelectScreen);
+  }
+  if (elements.openChatButton) {
+    elements.openChatButton.addEventListener('click', () => {
+      fadeGuidance();
+      handleActionCriteriaNotMet();
+      setAppMode(APP_MODES.CHAT, { announce: false, triggerGuide: false });
+      setGuideProcessActive(false);
+      setStatus('Chat opened. Ask your question.', 'default');
+      setTimeout(() => {
+        elements.questionInput?.focus();
+        requestWidgetResize();
+      }, 50);
+    });
   }
   if (elements.historyButton) {
     elements.historyButton.addEventListener('click', async () => {
@@ -456,7 +770,7 @@ function bindEvents() {
       return;
     }
     elements.questionInput.value = question;
-    await handleAsk({ delayMs: 2000, mode: 'diff_method' });
+    await handleAsk({ delayMs: getFollowupDelayMs(), mode: 'diff_method' });
     });
   }
   if (elements.pointElementButton) {
@@ -470,7 +784,7 @@ function bindEvents() {
       return;
     }
     elements.questionInput.value = question;
-    await handleAsk({ delayMs: 2000, mode: 'point' });
+    await handleAsk({ delayMs: getFollowupDelayMs(), mode: 'point' });
     });
   }
   if (elements.nextButton) {
@@ -484,7 +798,7 @@ function bindEvents() {
       return;
     }
     elements.questionInput.value = lastQuestion;
-    await handleAsk({ delayMs: 2000, auto: true, forceLast: true });
+    await handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appMode });
     });
   }
   window.electronAPI.onOverlayNext(() => {
@@ -497,7 +811,7 @@ function bindEvents() {
       return;
     }
     elements.questionInput.value = lastQuestion;
-    handleAsk({ delayMs: 2000, auto: true, forceLast: true });
+    handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appMode });
   });
   window.electronAPI.onCalloutComplete(() => {
     completeTaskAndReset();
@@ -625,7 +939,8 @@ function bindEvents() {
 
 function init() {
   bindEvents();
-  setStatus('Watching: Screen share', 'default');
+  setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });
+  setStatus('Focus mode ready. Select a screen to begin.', 'default');
   setTaskButtonsEnabled(false);
   clearChatLog();
   setupResizeObserver();

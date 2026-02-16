@@ -604,8 +604,8 @@ ipcMain.handle('resize-widget', async (event, size) => {
   if (!mainWindow || mainWindow.isDestroyed() || !size) {
     return false;
   }
-  const minWidth = 360;
-  const minHeight = 220;
+  const minWidth = 160;
+  const minHeight = 100;
   const maxHeightLimit = 720;
 
   const width = Math.max(minWidth, Math.round(size.width || 0));

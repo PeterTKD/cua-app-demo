@@ -389,6 +389,7 @@ export async function runCuaQuestion(question, options = {}) {
 
   const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 0;
   const captureDelayMs = Number.isFinite(options.captureDelayMs) ? options.captureDelayMs : 200;
+  const fastCapture = options.fastCapture === true;
   await window.electronAPI.setLoadingState(true);
   try {
     await window.electronAPI.setWidgetVisible(true);
@@ -405,7 +406,9 @@ export async function runCuaQuestion(question, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
     }
     await waitForFreshVideoFrame();
-    await waitForFreshVideoFrame();
+    if (!fastCapture) {
+      await waitForFreshVideoFrame();
+    }
     frame = captureFrame();
 
     if (!frame) {
