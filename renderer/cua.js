@@ -555,6 +555,13 @@ export async function runCuaQuestion(question, options = {}) {
         queuedFrame = null;
         pendingAction = false;
         pushConversation('system', DISCREPANCY_SYSTEM_NOTE);
+        if (typeof options.onSystemNote === 'function') {
+          try {
+            options.onSystemNote(DISCREPANCY_SYSTEM_NOTE);
+          } catch (_) {
+            // Keep retry path resilient if UI note callback fails.
+          }
+        }
         return runCuaQuestion(question, {
           ...options,
           discrepancyRetryCount: retryCount + 1,

@@ -109,7 +109,10 @@ export function bindOSInputHandlers({ completeStep, setStatus }) {
   window.electronAPI.onOSClick((event, data) => {
     const action = getCurrentAction();
     if (!action) {
-      setStatus('Click received, but no active target yet.', 'default');
+      const justCompletedMs = Date.now() - (appState.lastStepCompletedAt || 0);
+      if (justCompletedMs > 900) {
+        setStatus('Click received, but no active target yet.', 'default');
+      }
       return;
     }
 

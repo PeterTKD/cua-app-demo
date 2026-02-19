@@ -11,6 +11,8 @@ export const DOUBLE_CLICK_WINDOW_MS = 550;
 export const appState = {
   lastQuestion: '',
   isRunningCua: false,
+  isCompletingStep: false,
+  lastStepCompletedAt: 0,
   lastClickTime: 0,
   lastClickPoint: null,
   dragArmed: false,

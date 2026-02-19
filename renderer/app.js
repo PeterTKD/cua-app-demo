@@ -72,7 +72,22 @@ async function startGuideKickoff(force = false) {
 }
 
 function completeStep(message) {
+  const now = Date.now();
+  if (appState.isCompletingStep) {
+    return;
+  }
+  if (now - (appState.lastStepCompletedAt || 0) < 400) {
+    return;
+  }
   const action = getCurrentAction();
+  if (!action) {
+    return;
+  }
+
+  appState.isCompletingStep = true;
+  appState.lastStepCompletedAt = now;
+
+  try {
   setStatus(message, 'success');
   clearTargetRect();
   clearCurrentAction();
@@ -106,6 +121,9 @@ function completeStep(message) {
       fastCapture: appState.appMode === APP_MODES.GUIDE
     });
   }, settleDelayMs);
+  } finally {
+    appState.isCompletingStep = false;
+  }
 }
 
 function completeTaskAndReset() {
@@ -200,6 +218,13 @@ async function handleAsk(options = {}) {
         }
         setGuideProcessActive(true);
       }
+    };
+    runOptions.onSystemNote = (note) => {
+      if (!note) {
+        return;
+      }
+      addHistoryNote(note);
+      addSystemMessage(note);
     };
     if (activeMode === APP_MODES.GUIDE) {
       if (!Number.isFinite(runOptions.delayMs)) {
