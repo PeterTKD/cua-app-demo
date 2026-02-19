@@ -85,6 +85,56 @@
             gap: 10px;
         }
 
+        .summary {
+            font-size: 12px;
+            color: var(--ink-2);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: #f8fafc;
+        }
+
+        .metrics-wrap {
+            overflow-x: auto;
+        }
+
+        .metrics-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            border: 1px solid #dbe5f3;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #ffffff;
+        }
+
+        .metrics-table th,
+        .metrics-table td {
+            border-bottom: 1px solid #e8edf6;
+            padding: 6px 8px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .metrics-table thead th {
+            background: #f1f5f9;
+            color: #334155;
+            font-weight: 700;
+        }
+
+        .metrics-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .metrics-table .totals-row td {
+            background: #f8fafc;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
         pre {
             margin: 0;
             background: #0b1220;

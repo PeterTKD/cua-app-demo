@@ -205,7 +205,8 @@ async function handleAsk(options = {}) {
     const runOptions = {
       ...options,
       mode: activeMode,
-      allowEmpty
+      allowEmpty,
+      ttsEnabled: appState.isTTSEnabled
     };
     runOptions.onReasonerPlan = ({ isTaskCompleted, hasCuaCalls, primaryAction }) => {
       if (isTaskCompleted || !hasCuaCalls) {
@@ -218,13 +219,6 @@ async function handleAsk(options = {}) {
         }
         setGuideProcessActive(true);
       }
-    };
-    runOptions.onSystemNote = (note) => {
-      if (!note) {
-        return;
-      }
-      addHistoryNote(note);
-      addSystemMessage(note);
     };
     if (activeMode === APP_MODES.GUIDE) {
       if (!Number.isFinite(runOptions.delayMs)) {

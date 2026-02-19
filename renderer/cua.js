@@ -18,6 +18,7 @@ const ACTION_COLORS = {
   completed: '#16a34a'
 };
 
+//To delete if we decide not to use different callout types
 const CALLOUT_TYPE_COLORS = {
   info: '#38bdf8',
   hint: '#a78bfa',
@@ -34,7 +35,6 @@ let queuedFrame = null;
 let conversationHistory = [];
 let lastCalloutPayload = null;
 const DISCREPANCY_RETRY_LIMIT = 1;
-const DISCREPANCY_SYSTEM_NOTE = 'There was a discrepancy between your command and the CUA call, we\'ll try again.';
 
 function pushConversation(role, text) {
   if (!text) return;
@@ -554,14 +554,6 @@ export async function runCuaQuestion(question, options = {}) {
         queuedActions = [];
         queuedFrame = null;
         pendingAction = false;
-        pushConversation('system', DISCREPANCY_SYSTEM_NOTE);
-        if (typeof options.onSystemNote === 'function') {
-          try {
-            options.onSystemNote(DISCREPANCY_SYSTEM_NOTE);
-          } catch (_) {
-            // Keep retry path resilient if UI note callback fails.
-          }
-        }
         return runCuaQuestion(question, {
           ...options,
           discrepancyRetryCount: retryCount + 1,
@@ -610,6 +602,7 @@ export async function runCuaQuestion(question, options = {}) {
       question: historyQuestion,
       screenshot: frame.dataUrl,
       answer: reasonerJson.answer || null,
+      ttsEnabled: options.ttsEnabled === true,
       actionType: result.actionType || null,
       actionSummary: result.summary || null,
       reasonerResponse: reasonerResponse,
