@@ -33,6 +33,8 @@ let queuedActions = [];
 let queuedFrame = null;
 let conversationHistory = [];
 let lastCalloutPayload = null;
+const DISCREPANCY_RETRY_LIMIT = 1;
+const DISCREPANCY_SYSTEM_NOTE = 'There was a discrepancy between your command and the CUA call, we\'ll try again.';
 
 function pushConversation(role, text) {
   if (!text) return;
@@ -54,6 +56,50 @@ function buildCalloutText(summary) {
 function getDurationMs(response) {
   if (!response || !response.created_at || !response.completed_at) return null;
   return (response.completed_at - response.created_at) * 1000;
+}
+
+function isPointerAction(actionType) {
+  return ['click', 'double_click', 'drag', 'pinpoint'].includes(actionType);
+}
+
+function hasPointerCoordinates(action) {
+  if (!action || typeof action !== 'object') return false;
+  if (Array.isArray(action.path) && action.path.length > 0) {
+    const first = action.path[0];
+    return first && typeof first.x === 'number' && typeof first.y === 'number';
+  }
+  return typeof action.x === 'number' && typeof action.y === 'number';
+}
+
+function actionsAreCompatible(expectedAction, actualAction) {
+  if (!expectedAction || !actualAction) return false;
+  if (expectedAction === actualAction) return true;
+
+  if (expectedAction === 'pinpoint') {
+    return actualAction === 'click' || actualAction === 'pinpoint';
+  }
+  if (expectedAction === 'scroll') {
+    return ['scroll', 'scroll_up', 'scroll_down'].includes(actualAction);
+  }
+  if (expectedAction === 'scroll_up') {
+    return actualAction === 'scroll_up' || actualAction === 'scroll';
+  }
+  if (expectedAction === 'scroll_down') {
+    return actualAction === 'scroll_down' || actualAction === 'scroll';
+  }
+
+  return false;
+}
+
+function hasDiscrepancy(expectedAction, actualActionPayload) {
+  const actualActionType = actualActionPayload?.type || null;
+  if (!actionsAreCompatible(expectedAction, actualActionType)) {
+    return true;
+  }
+  if (isPointerAction(expectedAction) && !hasPointerCoordinates(actualActionPayload)) {
+    return true;
+  }
+  return false;
 }
 
 function extractReasonerJson(response) {
@@ -166,7 +212,8 @@ async function waitForFreshVideoFrame(timeoutMs = 600) {
 }
 
 async function runCuaInstruction({ call, frame, strict }) {
-  const promptQuestion = `Action: ${call.action}\nInstruction: ${call.target_description}`;
+  const cuaAction = call.action === 'pinpoint' ? 'click' : call.action;
+  const promptQuestion = `Action: ${cuaAction}\nInstruction: ${call.target_description}`;
   const response = await window.electronAPI.runCuaQuestion({
     question: promptQuestion,
     imageDataUrl: frame.dataUrl,
@@ -415,7 +462,7 @@ export async function runCuaQuestion(question, options = {}) {
       throw new Error('Failed to capture screen frame.');
     }
 
-    if (question) {
+    if (question && options.skipUserMessage !== true) {
       pushConversation('user', question);
     }
     const reasonerContext = {
@@ -439,22 +486,38 @@ export async function runCuaQuestion(question, options = {}) {
     });
     const reasonerDurationMs = Date.now() - reasonerStart;
     const reasonerJson = extractReasonerJson(reasonerResponse);
-    const suppressCallout = typeof reasonerJson.answer === 'string'
+    const isTaskCompleted = typeof reasonerJson.answer === 'string'
       && reasonerJson.answer.includes('<<TASK_COMPLETED>>');
+    const plannedCalls = Array.isArray(reasonerJson.cua_calls) ? reasonerJson.cua_calls : [];
+    if (typeof options.onReasonerPlan === 'function') {
+      try {
+        options.onReasonerPlan({
+          isTaskCompleted,
+          hasCuaCalls: plannedCalls.length > 0,
+          primaryAction: plannedCalls[0]?.action || null
+        });
+      } catch (_) {
+        // Keep the CUA flow resilient even if UI callback fails.
+      }
+    }
 
     if (reasonerJson.answer) {
       pushConversation('assistant', reasonerJson.answer);
     }
 
-    const cuaCalls = Array.isArray(reasonerJson.cua_calls) ? reasonerJson.cua_calls : [];
+    const cuaCalls = isTaskCompleted
+      ? []
+      : plannedCalls;
     const calloutOnly = cuaCalls.length === 0;
 
     let result = { action: null, summary: null, hasPointer: false, actionType: 'callout' };
     const cuaResponses = [];
 
     if (calloutOnly) {
-      if (suppressCallout) {
+      if (isTaskCompleted) {
         pendingAction = false;
+        queuedActions = [];
+        queuedFrame = null;
       } else {
       if (reasonerJson.callout && reasonerJson.callout.text && reasonerJson.callout.text !== 'none') {
         const calloutColor = resolveCalloutColor(reasonerJson.callout.type, null);
@@ -481,6 +544,26 @@ export async function runCuaQuestion(question, options = {}) {
       const cuaResults = await Promise.all(
         filteredCalls.map((call) => runCuaInstruction({ call, frame, strict: false }))
       );
+
+      const discrepancyDetected = cuaResults.some((item, index) => {
+        const expectedAction = filteredCalls[index]?.action || null;
+        return hasDiscrepancy(expectedAction, item?.action || null);
+      });
+      const retryCount = Number.isFinite(options.discrepancyRetryCount) ? options.discrepancyRetryCount : 0;
+      if (discrepancyDetected && retryCount < DISCREPANCY_RETRY_LIMIT) {
+        queuedActions = [];
+        queuedFrame = null;
+        pendingAction = false;
+        pushConversation('system', DISCREPANCY_SYSTEM_NOTE);
+        return runCuaQuestion(question, {
+          ...options,
+          discrepancyRetryCount: retryCount + 1,
+          skipUserMessage: true,
+          delayMs: 0,
+          captureDelayMs: 0,
+          fastCapture: true
+        });
+      }
 
       cuaResults.forEach((item) => {
         cuaResponses.push({ response: item.response, durationMs: getDurationMs(item.response) });

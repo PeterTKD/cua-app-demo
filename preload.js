@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideElementHighlight: () => ipcRenderer.invoke('hide-element-highlight'),
   runCuaQuestion: (payload) => ipcRenderer.invoke('cua-run', payload),
   runReasonerQuestion: (payload) => ipcRenderer.invoke('reasoner-run', payload),
+  synthesizeSpeech: (payload) => ipcRenderer.invoke('tts-synthesize', payload),
   closeApp: () => ipcRenderer.invoke('close-app'),
   onOSClick: (callback) => ipcRenderer.on('os-click', callback),
   onOSMouseDown: (callback) => ipcRenderer.on('os-mousedown', callback),

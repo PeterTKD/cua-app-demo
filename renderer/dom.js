@@ -9,6 +9,7 @@ export const elements = {
   historyButton: document.getElementById('historyBtn'),
   openChatButton: document.getElementById('openChatBtn'),
   nextButton: document.getElementById('nextBtn'),
+  ttsToggleButton: document.getElementById('ttsToggleBtn'),
   closeButton: document.getElementById('closeBtn'),
   statusText: document.getElementById('statusText'),
   chatLog: document.getElementById('chatLog'),

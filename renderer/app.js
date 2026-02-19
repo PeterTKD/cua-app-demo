@@ -13,6 +13,20 @@ import {
   runCuaQuestion
 } from './cua.js';
 import { ensureVideoReady, selectScreen, stopShare } from './screen-share.js';
+import { appState, APP_MODES } from './state.js';
+import { requestWidgetResize, setupResizeObserver } from './resize.js';
+import { stopCurrentAudio, speakText } from './tts.js';
+import { addChatMessage, addSystemMessage, clearChatLog } from './chat.js';
+import {
+  setAppMode,
+  setGuideProcessActive,
+  getFollowupDelayMs,
+  resolveAutoMode,
+  inferModeFromQuestion,
+  isGuidanceActionType,
+  registerSetStatus
+} from './mode.js';
+import { bindOSInputHandlers } from './input.js';
 
 function setStatus(message, tone = 'default') {
   elements.statusText.textContent = message;
@@ -25,184 +39,6 @@ function setStatus(message, tone = 'default') {
   }
 }
 
-function updateChatLayout() {
-  if (!elements.chatLog) return;
-  const hasMessages = elements.chatLog.children.length > 0;
-  elements.chatLog.classList.toggle('has-messages', hasMessages);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function renderMarkdown(value) {
-  const text = escapeHtml(value || '');
-  const lines = text.split(/\r?\n/);
-  let html = '';
-  let inCode = false;
-  let listOpen = false;
-  let codeBuffer = [];
-
-  const flushList = () => {
-    if (listOpen) {
-      html += '</ul>';
-      listOpen = false;
-    }
-  };
-
-  lines.forEach((line) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('```')) {
-      if (inCode) {
-        html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
-        codeBuffer = [];
-        inCode = false;
-      } else {
-        flushList();
-        inCode = true;
-      }
-      return;
-    }
-    if (inCode) {
-      codeBuffer.push(line);
-      return;
-    }
-    const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
-    if (listMatch) {
-      if (!listOpen) {
-        html += '<ul>';
-        listOpen = true;
-      }
-      html += `<li>${listMatch[1]}</li>`;
-      return;
-    }
-    flushList();
-    if (!trimmed) {
-      html += '<br />';
-      return;
-    }
-    html += `<p>${trimmed}</p>`;
-  });
-
-  flushList();
-  if (inCode && codeBuffer.length) {
-    html += `<pre><code>${codeBuffer.join('\n')}</code></pre>`;
-  }
-
-  html = html
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*(?!\s)([^*]+?)\*(?!\w)/g, '$1<em>$2</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-
-  return html;
-}
-
-let activeStreamInterval = null;
-
-function streamTextIntoBubble(bubble, message, onDone) {
-  const chars = Array.from(message);
-  let index = 0;
-  const chunkSize = 2;
-  const intervalMs = 12;
-  let resizeTick = 0;
-
-  bubble.classList.add('streaming');
-  bubble.innerHTML = '';
-
-  activeStreamInterval = setInterval(() => {
-    const end = Math.min(index + chunkSize, chars.length);
-    const partial = chars.slice(0, end).join('');
-    bubble.innerHTML = renderMarkdown(partial);
-    index = end;
-    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-
-    resizeTick += 1;
-    if (resizeTick % 5 === 0) {
-      requestWidgetResize();
-    }
-
-    if (index >= chars.length) {
-      clearInterval(activeStreamInterval);
-      activeStreamInterval = null;
-      bubble.classList.remove('streaming');
-      if (onDone) onDone();
-    }
-  }, intervalMs);
-}
-
-function finishActiveStream() {
-  if (activeStreamInterval) {
-    clearInterval(activeStreamInterval);
-    activeStreamInterval = null;
-    const streaming = elements.chatLog?.querySelector('.chat-bubble.streaming');
-    if (streaming) {
-      streaming.classList.remove('streaming');
-    }
-  }
-}
-
-function addChatMessage(message, role) {
-  if (!elements.chatLog) return;
-  finishActiveStream();
-  if (role === 'assistant' && typeof message === 'string' && message.includes('<<TASK_COMPLETED>>')) {
-    addSystemMessage('<<TASK_COMPLETED>> Task Completed');
-    const cleaned = message.replace('<<TASK_COMPLETED>>', '').replace(/^\s+/, '').trim();
-    if (!cleaned) {
-      return;
-    }
-    const bubble = document.createElement('div');
-    bubble.className = 'chat-bubble assistant';
-    elements.chatLog.appendChild(bubble);
-    updateChatLayout();
-    requestWidgetResize();
-    streamTextIntoBubble(bubble, cleaned, () => requestWidgetResize());
-    return;
-  }
-  const bubble = document.createElement('div');
-  bubble.className = `chat-bubble ${role === 'user' ? 'user' : 'assistant'}`;
-
-  if (role === 'assistant') {
-    elements.chatLog.appendChild(bubble);
-    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-    updateChatLayout();
-    requestWidgetResize();
-    streamTextIntoBubble(bubble, message, () => requestWidgetResize());
-  } else {
-    bubble.innerHTML = renderMarkdown(message);
-    elements.chatLog.appendChild(bubble);
-    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-    updateChatLayout();
-    requestWidgetResize();
-  }
-}
-
-function addSystemMessage(text) {
-  if (!elements.chatLog) return;
-  const bubble = document.createElement('div');
-  const isTaskCompleted = typeof text === 'string' && text.includes('<<TASK_COMPLETED>>');
-  bubble.className = isTaskCompleted ? 'chat-bubble system task-completed' : 'chat-bubble system';
-  const cleaned = isTaskCompleted
-    ? text.replace('<<TASK_COMPLETED>>', '').replace(/^\s+/, '').trim()
-    : text;
-  bubble.textContent = cleaned || (isTaskCompleted ? 'Task Completed' : '');
-  elements.chatLog.appendChild(bubble);
-  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
-  updateChatLayout();
-  requestWidgetResize();
-}
-
-function clearChatLog() {
-  if (!elements.chatLog) return;
-  elements.chatLog.innerHTML = '';
-  updateChatLayout();
-}
-
 function setTaskButtonsEnabled(enabled) {
   if (elements.diffMethodButton) elements.diffMethodButton.disabled = !enabled;
   if (elements.pointElementButton) elements.pointElementButton.disabled = !enabled;
@@ -210,113 +46,11 @@ function setTaskButtonsEnabled(enabled) {
   if (elements.nextButton) elements.nextButton.disabled = !enabled;
 }
 
-function getFollowupDelayMs() {
-  return appMode === APP_MODES.GUIDE ? 250 : 2000;
-}
-
-function setGuideProcessActive(active) {
-  const wasActive = isGuideProcessActive;
-  isGuideProcessActive = Boolean(active);
-  if (!isGuideProcessActive) {
-    guideProcessEpoch += 1;
-  }
-  if (elements.widget) {
-    elements.widget.classList.toggle('guide-process-active', isGuideProcessActive);
-
-    if (isGuideProcessActive && !wasActive) {
-      elements.widget.classList.remove('chat-entering');
-      elements.widget.classList.add('focus-entering');
-      elements.widget.addEventListener('animationend', () => {
-        elements.widget.classList.remove('focus-entering');
-      }, { once: true });
-    } else if (!isGuideProcessActive && wasActive) {
-      elements.widget.classList.remove('focus-entering');
-      elements.widget.classList.add('chat-entering');
-      elements.widget.addEventListener('animationend', () => {
-        elements.widget.classList.remove('chat-entering');
-      }, { once: true });
-    }
-  }
-  requestWidgetResize();
-  setTimeout(() => requestWidgetResize(), 50);
-  setTimeout(() => requestWidgetResize(), 200);
-  setTimeout(() => requestWidgetResize(), 450);
-}
-
-function updateModeUI() {
-  const isGuide = appMode === APP_MODES.GUIDE;
-  if (elements.modeBadge) {
-    elements.modeBadge.textContent = isGuide ? 'Focus' : 'Chat';
-  }
-  if (elements.askButton) {
-    elements.askButton.textContent = 'Send';
-  }
-  if (elements.questionInput) {
-    elements.questionInput.placeholder = isGuide
-      ? 'Optional goal (automatic focus when task is active)'
-      : 'Ask anything about this screen';
-  }
-}
-
-const GUIDE_INTENT_PATTERNS = [
-  /\b(click|double click|tap|press|select|choose|open|go to|navigate|scroll|drag|type|fill|enter)\b/i,
-  /\b(where is|show me|point to|highlight|walk me through|step by step|guide me|help me do)\b/i,
-  /\b(on this screen|in this app|next step|what should i do next)\b/i
-];
-
-const CHAT_INTENT_PATTERNS = [
-  /\b(explain|why|what is|how does|difference between|compare|summarize|definition)\b/i,
-  /\b(brainstorm|ideas|pros and cons|best practice|recommend)\b/i,
-  /\?/
-];
-
-function inferModeFromQuestion(question) {
-  const text = String(question || '').trim();
-  if (!text) {
-    return appMode;
-  }
-
-  let guideScore = 0;
-  let chatScore = 0;
-
-  GUIDE_INTENT_PATTERNS.forEach((pattern) => {
-    if (pattern.test(text)) {
-      guideScore += 1;
-    }
-  });
-  CHAT_INTENT_PATTERNS.forEach((pattern) => {
-    if (pattern.test(text)) {
-      chatScore += 1;
-    }
-  });
-
-  if (guideScore > chatScore) return APP_MODES.GUIDE;
-  if (chatScore > guideScore) return APP_MODES.CHAT;
-  return appMode;
-}
-
-function resolveAutoMode(options, question) {
-  if (options.mode === APP_MODES.GUIDE || options.mode === APP_MODES.CHAT) {
-    return options.mode;
-  }
-  if (options.mode === 'diff_method' || options.mode === 'point') {
-    return APP_MODES.GUIDE;
-  }
-  if (options.auto === true || hasPendingAction() || getCurrentAction()) {
-    return APP_MODES.GUIDE;
-  }
-  return inferModeFromQuestion(question);
-}
-
-function isGuidanceActionType(actionType) {
-  return ['click', 'double_click', 'drag', 'scroll', 'scroll_up', 'scroll_down', 'keypress', 'type', 'wait'].includes(actionType);
-}
-
 async function startGuideKickoff(force = false) {
-  if (appMode !== APP_MODES.GUIDE || isRunningCua) {
+  if (appState.appMode !== APP_MODES.GUIDE || appState.isRunningCua) {
     return;
   }
-  if (hasGuideKickoffStarted && !force) {
+  if (appState.hasGuideKickoffStarted && !force) {
     return;
   }
   const bounds = await window.electronAPI.getSharedDisplayBounds();
@@ -325,7 +59,7 @@ async function startGuideKickoff(force = false) {
     setStatus('Focus mode ready. Select a screen to begin.', 'default');
     return;
   }
-  hasGuideKickoffStarted = true;
+  appState.hasGuideKickoffStarted = true;
   await handleAsk({
     auto: true,
     allowEmpty: true,
@@ -335,94 +69,6 @@ async function startGuideKickoff(force = false) {
     captureDelayMs: 0,
     fastCapture: true
   });
-}
-
-function setAppMode(mode, options = {}) {
-  const { announce = true, triggerGuide = true } = options;
-  if (!Object.values(APP_MODES).includes(mode)) {
-    return;
-  }
-  if (mode === appMode) {
-    updateModeUI();
-    if (mode === APP_MODES.GUIDE && triggerGuide) {
-      startGuideKickoff(true).catch((error) => {
-        setStatus(error.message || 'Failed to start focus mode.', 'error');
-      });
-    }
-    return;
-  }
-  appMode = mode;
-  hasGuideKickoffStarted = false;
-  if (mode !== APP_MODES.GUIDE) {
-    setGuideProcessActive(false);
-  }
-  updateModeUI();
-  if (mode === APP_MODES.GUIDE) {
-    if (announce) {
-      addSystemMessage('Focus mode active.');
-    }
-    if (triggerGuide) {
-      startGuideKickoff(true).catch((error) => {
-        setStatus(error.message || 'Failed to start focus mode.', 'error');
-      });
-    }
-  } else {
-    if (announce) {
-      addSystemMessage('Chat mode active.');
-    }
-    setStatus('Chat mode active. Ask your question.', 'default');
-  }
-  requestWidgetResize();
-}
-
-let lastQuestion = '';
-let isRunningCua = false;
-let lastClickTime = 0;
-let lastClickPoint = null;
-let dragArmed = false;
-let lastKeydownAt = 0;
-let resizeRaf = null;
-let appMode = 'guide';
-let hasGuideKickoffStarted = false;
-let isGuideProcessActive = false;
-let guideProcessEpoch = 0;
-
-const POSITION_TOLERANCE = 20;
-const DOUBLE_CLICK_WINDOW_MS = 550;
-const APP_MODES = {
-  GUIDE: 'guide',
-  CHAT: 'chat'
-};
-
-const CHAT_WIDTH = 420;
-const FOCUS_WIDTH = 350;
-
-function requestWidgetResize() {
-  if (!elements.widget || !window.electronAPI?.resizeWidget) {
-    return;
-  }
-  if (resizeRaf) {
-    cancelAnimationFrame(resizeRaf);
-  }
-  resizeRaf = requestAnimationFrame(() => {
-    resizeRaf = null;
-    const padding = 48;
-    const isFocus = elements.widget.classList.contains('guide-process-active');
-    const targetWidth = isFocus ? FOCUS_WIDTH : CHAT_WIDTH;
-    const width = Math.max(targetWidth, Math.ceil(elements.widget.scrollWidth + padding));
-    const height = Math.ceil(elements.widget.scrollHeight + padding);
-    window.electronAPI.resizeWidget({ width, height });
-  });
-}
-
-function setupResizeObserver() {
-  requestWidgetResize();
-}
-
-function withinTolerance(x, y, targetX, targetY) {
-  const dx = x - targetX;
-  const dy = y - targetY;
-  return Math.hypot(dx, dy) <= POSITION_TOLERANCE;
 }
 
 function completeStep(message) {
@@ -443,11 +89,11 @@ function completeStep(message) {
   addHistoryNote('User Completed The Action');
   addConversationNote('User Completed The Action');
   addSystemMessage('Action Completed');
-  const followupDelayMs = appMode === APP_MODES.GUIDE ? 250 : 2000;
-  const settleDelayMs = appMode === APP_MODES.GUIDE ? 250 : 1000;
-  const stepEpoch = guideProcessEpoch;
+  const followupDelayMs = appState.appMode === APP_MODES.GUIDE ? 250 : 2000;
+  const settleDelayMs = appState.appMode === APP_MODES.GUIDE ? 250 : 1000;
+  const stepEpoch = appState.guideProcessEpoch;
   setTimeout(() => {
-    if (stepEpoch !== guideProcessEpoch) {
+    if (stepEpoch !== appState.guideProcessEpoch) {
       return;
     }
     handleAsk({
@@ -456,90 +102,19 @@ function completeStep(message) {
       userStatus: 'Action Criteria Met',
       allowEmpty: true,
       emptyInput: true,
-      mode: appMode,
-      fastCapture: appMode === APP_MODES.GUIDE
+      mode: appState.appMode,
+      fastCapture: appState.appMode === APP_MODES.GUIDE
     });
   }, settleDelayMs);
 }
 
-function normalizeKeyName(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function matchesKeyCombo(actionKeys, eventData) {
-  const expanded = actionKeys
-    .flatMap((key) => String(key || '').split('+'))
-    .map(normalizeKeyName)
-    .filter(Boolean);
-  const required = expanded.map((key) => {
-    if (key === 'control') return 'ctrl';
-    if (key === 'command') return 'cmd';
-    return key;
-  });
-  if (required.length === 0) return true;
-
-  const needsCtrl = required.includes('ctrl') || required.includes('control');
-  const needsAlt = required.includes('alt');
-  const needsShift = required.includes('shift');
-  const needsMeta = required.includes('meta') || required.includes('cmd') || required.includes('command') || required.includes('win');
-
-  if (needsCtrl && !eventData.ctrlKey) return false;
-  if (needsAlt && !eventData.altKey) return false;
-  if (needsShift && !eventData.shiftKey) return false;
-  if (needsMeta && !eventData.metaKey) return false;
-
-  const nonModifier = required.filter((key) => !['ctrl', 'alt', 'shift', 'meta', 'cmd', 'win'].includes(key));
-  if (nonModifier.length === 0) {
-    return true;
-  }
-
-  const rawcode = eventData.rawcode || eventData.keycode;
-  const isModifierEvent = [16, 17, 18, 91, 92].includes(rawcode);
-  const keyMatches = nonModifier.some((key) => {
-    if (key.length === 1) {
-      const upper = key.toUpperCase();
-      const code = upper.charCodeAt(0);
-      return rawcode === code;
-    }
-    if (key === 'enter') return rawcode === 13;
-    if (key === 'escape' || key === 'esc') return rawcode === 27;
-    if (key === 'tab') return rawcode === 9;
-    if (key === 'space' || key === 'spacebar') return rawcode === 32;
-    if (key === 'backspace') return rawcode === 8;
-    if (key === 'delete' || key === 'del') return rawcode === 46;
-    if (key === 'home') return rawcode === 36;
-    if (key === 'end') return rawcode === 35;
-    if (key === 'pageup' || key === 'page_up') return rawcode === 33;
-    if (key === 'pagedown' || key === 'page_down') return rawcode === 34;
-    if (key === 'insert') return rawcode === 45;
-    if (key === 'left') return rawcode === 37;
-    if (key === 'up') return rawcode === 38;
-    if (key === 'right') return rawcode === 39;
-    if (key === 'down') return rawcode === 40;
-    if (key.startsWith('f')) {
-      const n = Number.parseInt(key.slice(1), 10);
-      if (Number.isFinite(n) && n >= 1 && n <= 24) {
-        return rawcode === 111 + n;
-      }
-    }
-    return false;
-  });
-
-  if (keyMatches) {
-    return true;
-  }
-  if (nonModifier.length === 1 && !isModifierEvent) {
-    return true;
-  }
-  return false;
-}
-
 function completeTaskAndReset() {
+  stopCurrentAudio();
   clearTargetRect();
   clearCurrentAction();
   resetCuaState();
   clearHistory();
-  lastQuestion = '';
+  appState.lastQuestion = '';
   elements.questionInput.value = '';
   setStatus('Task completed. Ready for a new question.', 'success');
   setGuideProcessActive(false);
@@ -555,8 +130,8 @@ function resolveQuestion(mode, forceLast = false) {
     return inputValue;
   }
   const shouldReuseLast = forceLast || mode === 'diff_method' || mode === 'point';
-  if (shouldReuseLast && lastQuestion) {
-    return lastQuestion;
+  if (shouldReuseLast && appState.lastQuestion) {
+    return appState.lastQuestion;
   }
   return '';
 }
@@ -566,7 +141,7 @@ async function handleAsk(options = {}) {
     ? ''
     : resolveQuestion(options.mode, options.forceLast === true);
   const activeMode = resolveAutoMode(options, question);
-  if (activeMode !== appMode) {
+  if (activeMode !== appState.appMode) {
     setAppMode(activeMode, { announce: false, triggerGuide: false });
   }
   const allowEmpty = options.allowEmpty === true || activeMode === APP_MODES.GUIDE;
@@ -576,9 +151,11 @@ async function handleAsk(options = {}) {
   }
 
   try {
-    if (isRunningCua) {
+    if (appState.isRunningCua) {
       return;
     }
+    stopCurrentAudio();
+    if (elements.ttsToggleButton) elements.ttsToggleButton.disabled = true;
     if (hasPendingAction()) {
       fadeGuidance();
       handleActionCriteriaNotMet();
@@ -603,14 +180,26 @@ async function handleAsk(options = {}) {
       await waitForDisplayBounds();
     }
     setStatus(activeMode === APP_MODES.GUIDE ? 'Analyzing screen...' : 'Sending question to CUA...', 'default');
-    isRunningCua = true;
+    appState.isRunningCua = true;
     if (question) {
-      lastQuestion = question;
+      appState.lastQuestion = question;
     }
     const runOptions = {
       ...options,
       mode: activeMode,
       allowEmpty
+    };
+    runOptions.onReasonerPlan = ({ isTaskCompleted, hasCuaCalls, primaryAction }) => {
+      if (isTaskCompleted || !hasCuaCalls) {
+        return;
+      }
+      // Enter focus early from reasoner intent, except pinpoint-only guidance.
+      if (primaryAction && primaryAction !== 'pinpoint') {
+        if (appState.appMode !== APP_MODES.GUIDE) {
+          setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });
+        }
+        setGuideProcessActive(true);
+      }
     };
     if (activeMode === APP_MODES.GUIDE) {
       if (!Number.isFinite(runOptions.delayMs)) {
@@ -624,9 +213,10 @@ async function handleAsk(options = {}) {
     const result = await runCuaQuestion(question, runOptions);
     if (result && result.answer) {
       addChatMessage(result.answer, 'assistant');
+      speakText(result.answer);
     }
     if (result && isGuidanceActionType(result.actionType)) {
-      if (appMode !== APP_MODES.GUIDE) {
+      if (appState.appMode !== APP_MODES.GUIDE) {
         setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });
       }
       setGuideProcessActive(true);
@@ -637,7 +227,7 @@ async function handleAsk(options = {}) {
       setGuideProcessActive(false);
       if (question && !hasPendingAction()) {
         const inferredFromQuestion = inferModeFromQuestion(question);
-        if (appMode !== inferredFromQuestion) {
+        if (appState.appMode !== inferredFromQuestion) {
           setAppMode(inferredFromQuestion, { announce: false, triggerGuide: false });
         }
       }
@@ -646,7 +236,7 @@ async function handleAsk(options = {}) {
       setStatus('Waiting...', 'default');
       setTimeout(() => {
         completeStep('Wait complete.');
-      }, appMode === APP_MODES.GUIDE ? 300 : 2000);
+      }, appState.appMode === APP_MODES.GUIDE ? 300 : 2000);
       return;
     }
     if (result && result.actionType === 'callout') {
@@ -659,14 +249,14 @@ async function handleAsk(options = {}) {
       } else {
         setStatus('No pointer yet. Press Next to continue.', 'default');
       }
-      if ((lastQuestion || activeMode === APP_MODES.GUIDE) && !isRunningCua) {
+      if ((appState.lastQuestion || activeMode === APP_MODES.GUIDE) && !appState.isRunningCua) {
         const delayMs = activeMode === APP_MODES.GUIDE ? 500 : 2000;
-        const followupEpoch = guideProcessEpoch;
+        const followupEpoch = appState.guideProcessEpoch;
         setTimeout(() => {
-          if (followupEpoch !== guideProcessEpoch) {
+          if (followupEpoch !== appState.guideProcessEpoch) {
             return;
           }
-          if (!isRunningCua) {
+          if (!appState.isRunningCua) {
             handleAsk({
               delayMs: activeMode === APP_MODES.GUIDE ? 0 : 2000,
               auto: true,
@@ -689,8 +279,9 @@ async function handleAsk(options = {}) {
     setStatus(error.message || 'Failed to run CUA.', 'error');
     addChatMessage(error.message || 'Failed to run CUA.', 'assistant');
   } finally {
-    isRunningCua = false;
-    if (lastQuestion) {
+    appState.isRunningCua = false;
+    if (elements.ttsToggleButton) elements.ttsToggleButton.disabled = false;
+    if (appState.lastQuestion) {
       setTaskButtonsEnabled(true);
     }
   }
@@ -718,7 +309,7 @@ async function handleSelectScreen() {
     await ensureVideoReady();
     await waitForDisplayBounds();
     setStatus('Screen sharing active.', 'success');
-    if (appMode === APP_MODES.GUIDE) {
+    if (appState.appMode === APP_MODES.GUIDE) {
       await startGuideKickoff(true);
     }
   } catch (error) {
@@ -761,7 +352,7 @@ function bindEvents() {
   }
   if (elements.diffMethodButton) {
     elements.diffMethodButton.addEventListener('click', async () => {
-    if (isRunningCua) {
+    if (appState.isRunningCua) {
       return;
     }
     const question = resolveQuestion('diff_method');
@@ -775,7 +366,7 @@ function bindEvents() {
   }
   if (elements.pointElementButton) {
     elements.pointElementButton.addEventListener('click', async () => {
-    if (isRunningCua) {
+    if (appState.isRunningCua) {
       return;
     }
     const question = resolveQuestion('point');
@@ -789,7 +380,7 @@ function bindEvents() {
   }
   if (elements.nextButton) {
     elements.nextButton.addEventListener('click', async () => {
-    if (!lastQuestion || isRunningCua) {
+    if (!appState.lastQuestion || appState.isRunningCua) {
       return;
     }
     const action = getCurrentAction();
@@ -797,12 +388,12 @@ function bindEvents() {
       completeStep('Step complete.');
       return;
     }
-    elements.questionInput.value = lastQuestion;
-    await handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appMode });
+    elements.questionInput.value = appState.lastQuestion;
+    await handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appState.appMode });
     });
   }
   window.electronAPI.onOverlayNext(() => {
-    if (!lastQuestion || isRunningCua) {
+    if (!appState.lastQuestion || appState.isRunningCua) {
       return;
     }
     const action = getCurrentAction();
@@ -810,12 +401,25 @@ function bindEvents() {
       completeStep('Step complete.');
       return;
     }
-    elements.questionInput.value = lastQuestion;
-    handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appMode });
+    elements.questionInput.value = appState.lastQuestion;
+    handleAsk({ delayMs: getFollowupDelayMs(), auto: true, forceLast: true, mode: appState.appMode });
   });
   window.electronAPI.onCalloutComplete(() => {
     completeTaskAndReset();
   });
+  if (elements.ttsToggleButton) {
+    elements.ttsToggleButton.addEventListener('click', () => {
+      if (appState.currentAudio && !appState.currentAudio.paused) {
+        stopCurrentAudio();
+      }
+      appState.isTTSEnabled = !appState.isTTSEnabled;
+      elements.ttsToggleButton.classList.toggle('tts-active', appState.isTTSEnabled);
+      elements.ttsToggleButton.title = appState.isTTSEnabled ? 'Mute audio' : 'Enable audio';
+      if (!appState.isTTSEnabled) {
+        stopCurrentAudio();
+      }
+    });
+  }
   if (elements.closeButton) {
     elements.closeButton.addEventListener('click', () => {
       window.electronAPI.closeApp();
@@ -828,109 +432,7 @@ function bindEvents() {
     }
   });
 
-  window.electronAPI.onOSClick((event, data) => {
-    const action = getCurrentAction();
-    if (!action) {
-      setStatus('Click received, but no active target yet.', 'default');
-      return;
-    }
-
-    if (action.type === 'click') {
-      if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
-        completeStep('Click complete.');
-      } else {
-        setStatus('Not quite there. Try clicking the pointer.', 'default');
-      }
-      return;
-    }
-
-    if (action.type === 'double_click') {
-      if (!withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
-        setStatus('Double click near the pointer.', 'default');
-        return;
-      }
-      const now = Date.now();
-      if (lastClickTime && lastClickPoint && now - lastClickTime <= DOUBLE_CLICK_WINDOW_MS) {
-        if (withinTolerance(data.absoluteX, data.absoluteY, lastClickPoint.x, lastClickPoint.y)) {
-          window.electronAPI.showCallout({
-            heading: 'Double click',
-            body: 'Double click detected.',
-            borderColor: '#22c55e',
-            headingColor: '#22c55e',
-            x: action.dipX,
-            y: action.dipY,
-            showNext: false
-          });
-          completeStep('Double click complete.');
-          lastClickTime = 0;
-          lastClickPoint = null;
-          return;
-        }
-      }
-      lastClickTime = now;
-      lastClickPoint = { x: data.absoluteX, y: data.absoluteY };
-      setStatus('Double click again to complete.', 'default');
-    }
-  });
-
-  window.electronAPI.onOSMouseDown((event, data) => {
-    const action = getCurrentAction();
-    if (!action || action.type !== 'drag') {
-      return;
-    }
-    if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
-      dragArmed = true;
-    }
-  });
-
-  window.electronAPI.onOSMouseMove((event, data) => {
-    const action = getCurrentAction();
-    if (!action) {
-      return;
-    }
-    if (action.type === 'pinpoint') {
-      if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
-        completeStep('Pinpoint acknowledged.');
-      }
-      return;
-    }
-    if (action.type !== 'drag' || !dragArmed) {
-      return;
-    }
-    if (action.x2 && action.y2 && withinTolerance(data.absoluteX, data.absoluteY, action.x2, action.y2)) {
-      dragArmed = false;
-      completeStep('Drag complete.');
-    }
-  });
-
-  window.electronAPI.onOSMouseUp(() => {
-    dragArmed = false;
-  });
-
-  window.electronAPI.onOSWheel(() => {
-    const action = getCurrentAction();
-    if (!action) return;
-    if (['scroll', 'scroll_up', 'scroll_down'].includes(action.type)) {
-      completeStep('Scroll complete.');
-    }
-  });
-
-  window.electronAPI.onOSKeyDown((event, data) => {
-    const action = getCurrentAction();
-    if (!action) return;
-    if (action.type === 'keypress') {
-      if (Array.isArray(action.keys) && action.keys.length > 1) {
-        const now = Date.now();
-        if (matchesKeyCombo(action.keys, data)) {
-          completeStep('Input complete.');
-          return;
-        }
-        lastKeydownAt = now;
-        return;
-      }
-      completeStep('Input complete.');
-    }
-  });
+  bindOSInputHandlers({ completeStep, setStatus });
 
   window.electronAPI.onMainWindowClosing(() => {
     stopShare();
@@ -938,6 +440,7 @@ function bindEvents() {
 }
 
 function init() {
+  registerSetStatus(setStatus);
   bindEvents();
   setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });
   setStatus('Focus mode ready. Select a screen to begin.', 'default');

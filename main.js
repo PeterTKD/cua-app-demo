@@ -5,6 +5,7 @@ const { uIOhook } = require('uiohook-napi');
 const UIAutomationDetector = require('./ui-automation');
 const { runCuaQuestion } = require('./cua-client');
 const { runReasonerQuestion } = require('./reasoner-client');
+const { synthesizeSpeech } = require('./tts-client');
 
 let mainWindow;
 let overlayWindow = null;
@@ -22,6 +23,44 @@ let currentDisplayId = null;
 let currentDisplayBounds = null;
 const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
 const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
+
+function getScaleFactorSafe(display) {
+  return display?.scaleFactor || 1;
+}
+
+function dipToScreenPointSafe(point, scaleFactor = 1) {
+  if (screen && typeof screen.dipToScreenPoint === 'function') {
+    return screen.dipToScreenPoint(point);
+  }
+  return {
+    x: Math.round(point.x * scaleFactor),
+    y: Math.round(point.y * scaleFactor)
+  };
+}
+
+function screenToDipPointSafe(point, scaleFactor = 1) {
+  if (screen && typeof screen.screenToDipPoint === 'function') {
+    return screen.screenToDipPoint(point);
+  }
+  return {
+    x: Math.round(point.x / scaleFactor),
+    y: Math.round(point.y / scaleFactor)
+  };
+}
+
+function computePhysicalBoundsFromDip(dipBounds, scaleFactor = 1) {
+  const topLeft = dipToScreenPointSafe({ x: dipBounds.x, y: dipBounds.y }, scaleFactor);
+  const bottomRight = dipToScreenPointSafe(
+    { x: dipBounds.x + dipBounds.width, y: dipBounds.y + dipBounds.height },
+    scaleFactor
+  );
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: Math.max(1, bottomRight.x - topLeft.x),
+    height: Math.max(1, bottomRight.y - topLeft.y)
+  };
+}
 
 function resolvePromptFile(name) {
   if (name === 'system' && process.env.CUA_PROMPT_PATH) {
@@ -68,8 +107,9 @@ ipcMain.handle('get-display-info', async (event, displayId) => {
   if (!target) {
     return null;
   }
-  const originScaleFactor = screen.getPrimaryDisplay().scaleFactor || 1;
-  const scaleFactor = target.scaleFactor || 1;
+  const originScaleFactor = getScaleFactorSafe(screen.getPrimaryDisplay());
+  const scaleFactor = getScaleFactorSafe(target);
+  const physicalBounds = computePhysicalBoundsFromDip(target.bounds, scaleFactor);
   return {
     id: target.id,
     bounds: target.bounds,
@@ -77,8 +117,8 @@ ipcMain.handle('get-display-info', async (event, displayId) => {
     virtualScaleFactor: originScaleFactor,
     size: target.size,
     physicalSize: {
-      width: Math.round(target.size.width * scaleFactor),
-      height: Math.round(target.size.height * scaleFactor)
+      width: physicalBounds.width,
+      height: physicalBounds.height
     }
   };
 });
@@ -195,14 +235,9 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
   
   currentDisplayId = displayId; // Store current display ID
   currentDisplayBounds = targetDisplay.bounds; // Store display bounds for coordinate calculation
-  currentDisplayScaleFactor = targetDisplay.scaleFactor || 1;
-  currentDisplayOriginScaleFactor = screen.getPrimaryDisplay().scaleFactor || 1;
-  currentDisplayPhysicalBounds = {
-    x: Math.round(targetDisplay.bounds.x * currentDisplayOriginScaleFactor),
-    y: Math.round(targetDisplay.bounds.y * currentDisplayOriginScaleFactor),
-    width: targetDisplay.bounds.width * currentDisplayScaleFactor,
-    height: targetDisplay.bounds.height * currentDisplayScaleFactor
-  };
+  currentDisplayScaleFactor = getScaleFactorSafe(targetDisplay);
+  currentDisplayOriginScaleFactor = getScaleFactorSafe(screen.getPrimaryDisplay());
+  currentDisplayPhysicalBounds = computePhysicalBoundsFromDip(targetDisplay.bounds, currentDisplayScaleFactor);
   
   if (overlayWindow) {
     overlayWindow.close();
@@ -283,12 +318,36 @@ ipcMain.handle('show-callout', async (event, payload) => {
     const displayBounds = currentDisplayBounds || { x: 0, y: 0, width: 1920, height: 1080 };
     const baseX = displayBounds.x || 0;
     const baseY = displayBounds.y || 0;
-    const targetX = typeof payload.x === 'number' && payload.x >= 0 ? payload.x : Math.round(displayBounds.width * 0.5);
-    const targetY = typeof payload.y === 'number' && payload.y >= 0 ? payload.y : Math.round(displayBounds.height * 0.35);
+    const startX = typeof payload.x === 'number' && payload.x >= 0 ? payload.x : Math.round(displayBounds.width * 0.5);
+    const startY = typeof payload.y === 'number' && payload.y >= 0 ? payload.y : Math.round(displayBounds.height * 0.35);
     const windowWidth = calloutWindow.getBounds().width || 460;
     const windowHeight = calloutWindow.getBounds().height || 180;
     const maxX = baseX + displayBounds.width - windowWidth - 12;
     const maxY = baseY + displayBounds.height - windowHeight - 12;
+
+    let targetX = startX;
+    let targetY = startY;
+
+    // For drag actions, position the callout away from both start and end points
+    const hasEndPoint = typeof payload.endX === 'number' && payload.endX >= 0
+      && typeof payload.endY === 'number' && payload.endY >= 0;
+    if (hasEndPoint) {
+      const endX = payload.endX;
+      const endY = payload.endY;
+      const midX = Math.round((startX + endX) / 2);
+      const midY = Math.round((startY + endY) / 2);
+      // Place callout above or below the drag midpoint, whichever has more room
+      const spaceAbove = midY;
+      const spaceBelow = displayBounds.height - midY;
+      if (spaceAbove > spaceBelow) {
+        targetX = midX;
+        targetY = Math.max(0, Math.min(startY, endY) - windowHeight - 30);
+      } else {
+        targetX = midX;
+        targetY = Math.max(startY, endY) + 30;
+      }
+    }
+
     const x = Math.max(baseX + 12, Math.min(maxX, baseX + targetX + 18));
     const y = Math.max(baseY + 12, Math.min(maxY, baseY + targetY + 18));
     calloutWindow.setPosition(Math.round(x), Math.round(y), false);
@@ -681,6 +740,17 @@ ipcMain.handle('reasoner-run', async (event, payload) => {
   }
 });
 
+ipcMain.handle('tts-synthesize', async (event, payload) => {
+  try {
+    const buffer = await synthesizeSpeech(payload);
+    if (!buffer) return null;
+    return buffer.toString('base64');
+  } catch (error) {
+    console.error('TTS error:', error);
+    throw error;
+  }
+});
+
 // Get current shared display bounds
 ipcMain.handle('get-shared-display-bounds', async () => {
   return currentDisplayBounds
@@ -705,16 +775,17 @@ ipcMain.handle('show-element-highlight', async (event, { x, y, width, height, co
     // Add padding around the element (5px on each side)
     const padding = 5;
     const scaleFactor = currentDisplayScaleFactor || 1;
-    const physicalBounds = currentDisplayPhysicalBounds || { x: 0, y: 0 };
-    const dipOriginX = currentDisplayBounds ? currentDisplayBounds.x : 0;
-    const dipOriginY = currentDisplayBounds ? currentDisplayBounds.y : 0;
-
-    const dipX = (x - physicalBounds.x) / scaleFactor + dipOriginX;
-    const dipY = (y - physicalBounds.y) / scaleFactor + dipOriginY;
-    const highlightX = Math.round(dipX - padding);
-    const highlightY = Math.round(dipY - padding);
-    const highlightWidth = Math.round(width / scaleFactor + padding * 2);
-    const highlightHeight = Math.round(height / scaleFactor + padding * 2);
+    const startDip = screenToDipPointSafe({ x: Math.round(x), y: Math.round(y) }, scaleFactor);
+    const endDip = screenToDipPointSafe(
+      { x: Math.round(x + width), y: Math.round(y + height) },
+      scaleFactor
+    );
+    const dipWidth = Math.max(1, endDip.x - startDip.x);
+    const dipHeight = Math.max(1, endDip.y - startDip.y);
+    const highlightX = Math.round(startDip.x - padding);
+    const highlightY = Math.round(startDip.y - padding);
+    const highlightWidth = Math.round(dipWidth + padding * 2);
+    const highlightHeight = Math.round(dipHeight + padding * 2);
     
     // Use custom color or default red
     const borderColor = color || '#f44336';
