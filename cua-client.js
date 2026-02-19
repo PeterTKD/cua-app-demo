@@ -1,5 +1,6 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const path = require('path');
+const { getApiKey } = require('./api-keys');
 
 const DEFAULT_CUA_ENDPOINT = process.env.CUA_ENDPOINT || 'https://api.openai.com/v1/responses';
 const CUA_PROMPT_PATH = process.env.CUA_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.1', 'cua.txt');
@@ -54,7 +55,7 @@ async function runCuaQuestion({ question, imageDataUrl, displayWidth, displayHei
     throw new Error('Missing display size');
   }
 
-  const apiKey = process.env.CUA_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey = getApiKey('CUA_API_KEY');
   if (!apiKey) {
     throw new Error('Missing CUA_API_KEY or OPENAI_API_KEY');
   }
@@ -94,3 +95,4 @@ async function runCuaQuestion({ question, imageDataUrl, displayWidth, displayHei
 module.exports = {
   runCuaQuestion
 };
+

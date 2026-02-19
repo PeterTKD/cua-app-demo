@@ -1,3 +1,4 @@
+const { getApiKey } = require('./api-keys');
 const TTS_ENDPOINT = process.env.TTS_ENDPOINT || 'https://api.openai.com/v1/audio/speech';
 const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts-2025-12-15';
 const TTS_VOICE = process.env.TTS_VOICE || 'alloy';
@@ -18,7 +19,7 @@ function cleanTextForTTS(text) {
 }
 
 async function synthesizeSpeech({ text, voice, model }) {
-  const apiKey = process.env.TTS_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey = getApiKey('TTS_API_KEY');
   if (!apiKey) {
     throw new Error('Missing TTS_API_KEY or OPENAI_API_KEY');
   }
@@ -52,3 +53,4 @@ async function synthesizeSpeech({ text, voice, model }) {
 }
 
 module.exports = { synthesizeSpeech, cleanTextForTTS };
+

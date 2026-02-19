@@ -1,5 +1,6 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const path = require('path');
+const { getApiKey } = require('./api-keys');
 
 const DEFAULT_REASONER_ENDPOINT = process.env.REASONER_ENDPOINT || 'https://api.openai.com/v1/responses';
 const REASONER_MODEL = process.env.REASONER_MODEL || 'gpt-5.2';
@@ -59,7 +60,7 @@ async function runReasonerQuestion({ context, imageDataUrl }) {
     throw new Error('Missing image data');
   }
 
-  const apiKey = process.env.REASONER_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey = getApiKey('REASONER_API_KEY');
   if (!apiKey) {
     throw new Error('Missing REASONER_API_KEY or OPENAI_API_KEY');
   }
@@ -86,3 +87,4 @@ async function runReasonerQuestion({ context, imageDataUrl }) {
 module.exports = {
   runReasonerQuestion
 };
+

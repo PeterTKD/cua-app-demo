@@ -74,7 +74,7 @@ export function updateModeUI() {
   }
   if (elements.questionInput) {
     elements.questionInput.placeholder = isGuide
-      ? 'Optional goal (automatic focus when task is active)'
+      ? 'Ask a question.'
       : 'Ask anything about this screen';
   }
 }
