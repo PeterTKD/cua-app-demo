@@ -1,11 +1,30 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
 const { uIOhook } = require('uiohook-napi');
 const UIAutomationDetector = require('./ui-automation');
 const { runCuaQuestion } = require('./cua-client');
-const { runReasonerQuestion } = require('./reasoner-client');
+const { runReasonerQuestion, getAvailableModels, getCurrentModel, setCurrentModel } = require('./reasoner-client');
 const { synthesizeSpeech } = require('./tts-client');
+const { transcribeAudio } = require('./stt-api');
+
+let portAudio = null;
+try {
+  // Stub segfault-handler BEFORE loading naudiodon.
+  // segfault-handler installs a VEH that calls _exit(1) on ANY native exception —
+  // including benign ones from PortAudio/MME cleanup — killing the whole process.
+  const Module = require('module');
+  const _origLoad = Module._load.bind(Module);
+  Module._load = function (request, parent, isMain) {
+    if (request === 'segfault-handler') return { registerHandler: () => {} };
+    return _origLoad(request, parent, isMain);
+  };
+  portAudio = require('naudiodon');
+  Module._load = _origLoad; // restore after naudiodon is loaded
+} catch (e) {
+  console.warn('[Audio] naudiodon not available:', e.message);
+}
 
 let mainWindow;
 let overlayWindow = null;
@@ -14,6 +33,8 @@ let calloutWindow = null;
 let screenPickerWindow = null;
 let screenPickerResolver = null;
 let historyWindow = null;
+let audioCapture = null;
+let audioCaptureChunks = [];
 let isCapturingOSClicks = false;
 let currentDisplayScaleFactor = 1;
 let currentDisplayPhysicalBounds = null;
@@ -23,6 +44,37 @@ let currentDisplayId = null;
 let currentDisplayBounds = null;
 const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
 const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
+
+function safeSendToMain(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.webContents || mainWindow.webContents.isDestroyed()) {
+    return false;
+  }
+  if (typeof mainWindow.webContents.isCrashed === 'function' && mainWindow.webContents.isCrashed()) {
+    return false;
+  }
+  let frame = null;
+  try {
+    frame = mainWindow.webContents.mainFrame || null;
+  } catch (_) {
+    return false;
+  }
+  if (!frame) {
+    return false;
+  }
+  try {
+    if (typeof frame.isDestroyed === 'function' && frame.isDestroyed()) {
+      return false;
+    }
+  } catch (_) {
+    return false;
+  }
+  try {
+    mainWindow.webContents.send(channel, payload);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 function getScaleFactorSafe(display) {
   return display?.scaleFactor || 1;
@@ -84,6 +136,27 @@ function resolvePromptFile(name) {
         ? 'point.txt'
         : 'system.txt';
   return path.join(PROMPTS_DIR, version, fileName);
+}
+
+function encodeWavBuffer(pcmBuffer, sampleRate) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const dataSize = pcmBuffer.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * numChannels * bitsPerSample / 8, 28);
+  header.writeUInt16LE(numChannels * bitsPerSample / 8, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcmBuffer]);
 }
 
 // Initialize UI Automation detector
@@ -452,63 +525,51 @@ function setupOSClickCapture() {
   if (isCapturingOSClicks) return;
 
   uIOhook.on('click', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-click', {
-        absoluteX: event.x,
-        absoluteY: event.y
-      });
-    }
+    safeSendToMain('os-click', {
+      absoluteX: event.x,
+      absoluteY: event.y
+    });
   });
 
   uIOhook.on('mousedown', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-mousedown', {
-        absoluteX: event.x,
-        absoluteY: event.y,
-        button: event.button
-      });
-    }
+    safeSendToMain('os-mousedown', {
+      absoluteX: event.x,
+      absoluteY: event.y,
+      button: event.button
+    });
   });
 
   uIOhook.on('mouseup', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-mouseup', {
-        absoluteX: event.x,
-        absoluteY: event.y,
-        button: event.button
-      });
-    }
+    safeSendToMain('os-mouseup', {
+      absoluteX: event.x,
+      absoluteY: event.y,
+      button: event.button
+    });
   });
 
   uIOhook.on('mousemove', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-mousemove', {
-        absoluteX: event.x,
-        absoluteY: event.y
-      });
-    }
+    safeSendToMain('os-mousemove', {
+      absoluteX: event.x,
+      absoluteY: event.y
+    });
   });
 
   uIOhook.on('wheel', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-wheel', {
-        amount: event.amount,
-        rotation: event.rotation
-      });
-    }
+    safeSendToMain('os-wheel', {
+      amount: event.amount,
+      rotation: event.rotation
+    });
   });
 
   uIOhook.on('keydown', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('os-keydown', {
-        keycode: event.keycode,
-        rawcode: event.rawcode,
-        ctrlKey: event.ctrlKey,
-        altKey: event.altKey,
-        shiftKey: event.shiftKey,
-        metaKey: event.metaKey
-      });
-    }
+    safeSendToMain('os-keydown', {
+      keycode: event.keycode,
+      rawcode: event.rawcode,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey
+    });
   });
 
   uIOhook.start();
@@ -596,9 +657,9 @@ function createWindow() {
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   mainWindow.setFullScreenable(false);
 
-  // Enable screen sharing
+  // Enable screen sharing and microphone access
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'media') {
+    if (permission === 'media' || permission === 'microphone') {
       callback(true);
     } else {
       callback(false);
@@ -607,15 +668,25 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
-  // Uncomment to open DevTools
-  // mainWindow.webContents.openDevTools();
+  mainWindow.webContents.on('did-finish-load', () => {
+    setupOSClickCapture();
+
+  });
+
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('[CRASH] Renderer process gone:', details.reason, details.exitCode);
+    stopOSClickCapture();
+    // Reload renderer so the window doesn't go blank
+    mainWindow.webContents.reload();
+  });
 
   mainWindow.on('close', function (e) {
     // Notify renderer to clean up streams
-    mainWindow.webContents.send('main-window-closing');
+    safeSendToMain('main-window-closing');
   });
 
   mainWindow.on('closed', function () {
+    stopOSClickCapture();
     // Close overlay window if it exists
     if (overlayWindow) {
       overlayWindow.destroy();
@@ -631,8 +702,6 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  
-  setupOSClickCapture();
 
 
   // Register global shortcut for toggling overlay clickability
@@ -705,7 +774,6 @@ app.on('before-quit', () => {
     calloutWindow.destroy();
     calloutWindow = null;
   }
-  
 });
 
 // UI Automation IPC handlers
@@ -740,6 +808,19 @@ ipcMain.handle('reasoner-run', async (event, payload) => {
   }
 });
 
+ipcMain.handle('reasoner-get-models', async () => {
+  return getAvailableModels();
+});
+
+ipcMain.handle('reasoner-get-model', async () => {
+  return getCurrentModel();
+});
+
+ipcMain.handle('reasoner-set-model', async (event, modelId) => {
+  setCurrentModel(modelId);
+  return { success: true, modelId };
+});
+
 ipcMain.handle('tts-synthesize', async (event, payload) => {
   try {
     const buffer = await synthesizeSpeech(payload);
@@ -749,6 +830,111 @@ ipcMain.handle('tts-synthesize', async (event, payload) => {
     console.error('TTS error:', error);
     throw error;
   }
+});
+
+ipcMain.handle('stt-transcribe-local', async (event, payload) => {
+  try {
+    const result = await transcribeAudio(payload || {});
+    return result;
+  } catch (error) {
+    throw error;
+  }
+});
+
+// Audio capture IPC handlers — uses naudiodon (PortAudio) in the main process
+// to avoid Chromium WASAPI crashes (STATUS_ACCESS_VIOLATION).
+ipcMain.handle('audio-start-capture', async () => {
+  if (!portAudio) {
+    throw new Error('naudiodon is not installed. Run: npm install naudiodon');
+  }
+
+  // Stop any previous capture
+  if (audioCapture) {
+    try { audioCapture.quit(); } catch (_) {}
+    audioCapture = null;
+  }
+  audioCaptureChunks = [];
+
+  // Prefer MME or DirectSound over WASAPI — WASAPI crashes on some Windows systems
+  let deviceId = -1;
+  try {
+    const devices = portAudio.getDevices();
+    const inputs = devices.filter(d => d.maxInputChannels > 0);
+    console.log('[Audio] Input devices:', inputs.map(d => `${d.id}:${d.name}(${d.hostAPIName})`).join(', '));
+    const chosen = inputs.find(d => d.hostAPIName === 'MME')
+                || inputs.find(d => d.hostAPIName === 'Windows DirectSound');
+    if (chosen) {
+      deviceId = chosen.id;
+      console.log('[Audio] Using device:', chosen.name, chosen.hostAPIName, 'id:', deviceId);
+    } else {
+      console.warn('[Audio] No MME/DirectSound device found, using default (WASAPI)');
+    }
+  } catch (devErr) {
+    console.warn('[Audio] Device enumeration failed:', devErr.message);
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      audioCapture = new portAudio.AudioIO({
+        inOptions: {
+          channelCount: 1,
+          sampleFormat: portAudio.SampleFormat16Bit,
+          sampleRate: 16000,
+          deviceId,
+          closeOnError: false
+        }
+      });
+
+      audioCapture.on('data', (chunk) => {
+        audioCaptureChunks.push(Buffer.from(chunk));
+      });
+
+      audioCapture.on('error', (err) => {
+        console.error('[Audio] Capture error:', err.message);
+      });
+
+      audioCapture.start();
+      resolve();
+    } catch (err) {
+      audioCapture = null;
+      audioCaptureChunks = [];
+      reject(new Error(err.message || 'Failed to open microphone'));
+    }
+  });
+});
+
+ipcMain.handle('audio-stop-capture', async () => {
+  if (!audioCapture) {
+    throw new Error('Audio capture not active.');
+  }
+
+  const capture = audioCapture;
+  audioCapture = null;
+  const chunks = audioCaptureChunks;
+  audioCaptureChunks = [];
+
+  // Wait for stream to fully close before returning, so PortAudio threads
+  // finish cleanup before anything else runs (prevents post-quit SIGSEGV).
+  await new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, 800);
+    capture.once('close', done);
+    capture.once('finish', done);
+    try { capture.quit(); } catch (_) { done(); }
+  });
+
+  if (!chunks.length) return '';
+  const pcm = Buffer.concat(chunks);
+  return encodeWavBuffer(pcm, 16000).toString('base64');
+});
+
+ipcMain.handle('audio-interim', async () => {
+  if (!audioCapture || !audioCaptureChunks.length) return '';
+  // Send only the last 4 seconds of audio for faster API response
+  const maxBytes = 16000 * 2 * 4; // 16kHz × 16-bit × 4s
+  const pcmFull = Buffer.concat(audioCaptureChunks.map(c => Buffer.from(c)));
+  const pcm = pcmFull.length > maxBytes ? pcmFull.slice(pcmFull.length - maxBytes) : pcmFull;
+  return encodeWavBuffer(pcm, 16000).toString('base64');
 });
 
 // Get current shared display bounds

@@ -9,6 +9,7 @@ export function addHistoryItem({
   actionSummary,
   reasonerResponse,
   reasonerDurationMs,
+  cuaElapsedMs,
   cuaResponses
 }) {
   history.unshift({
@@ -22,6 +23,7 @@ export function addHistoryItem({
     actionSummary,
     reasonerResponse,
     reasonerDurationMs,
+    cuaElapsedMs: Number(cuaElapsedMs) || 0,
     cuaResponses: Array.isArray(cuaResponses) ? cuaResponses : [],
     timestamp: new Date()
   });

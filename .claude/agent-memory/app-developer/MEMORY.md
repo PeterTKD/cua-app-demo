@@ -13,6 +13,16 @@
 - `setAppMode` (mode.js) needed `startGuideKickoff` (app.js). Solved via `onGuideKickoff` callback in options + `registerSetStatus()` for the `setStatus` dependency.
 - `bindOSInputHandlers` (input.js) receives `{ completeStep, setStatus }` as parameter to avoid importing from app.js.
 
+## Audio Capture Architecture (naudiodon)
+- Chromium's WASAPI `getUserMedia({ audio: true })` crashes renderer on Windows (STATUS_ACCESS_VIOLATION)
+- Audio capture now runs in the main Node.js process using `naudiodon` (PortAudio bindings)
+- `main.js`: `portAudio = require('naudiodon')` with try/catch fallback
+- `audioCapture` (AudioIO instance) and `audioCaptureChunks` (Buffer[]) are module-level vars
+- `audio-start-capture` IPC: creates AudioIO with 16kHz/mono/16bit, collects chunks via 'data' event
+- `audio-stop-capture` IPC: calls `.quit()`, concatenates PCM, wraps in WAV via `encodeWavBuffer()`, returns base64
+- Old hidden BrowserWindow approach removed from main.js; `audio-worker.html`/`audio-worker-preload.js` files still on disk
+- `preload.js` and `renderer/app.js` unchanged — same `startAudioCapture`/`stopAudioCapture` IPC channels
+
 ## Key Conventions
 - All mutable state lives in `appState` object (state.js) — shared by reference across modules
 - `window.electronAPI` hints in TS diagnostics are pre-existing and expected (Electron preload bridge)

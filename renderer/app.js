@@ -28,6 +28,13 @@ import {
 } from './mode.js';
 import { bindOSInputHandlers } from './input.js';
 
+let speechSupported = Boolean(window.electronAPI?.startAudioCapture) && Boolean(window.electronAPI?.transcribeLocalSpeech);
+let speechRecording = false;
+let speechTranscribing = false;
+let speechBaseText = '';
+let speechInterimPending = false;
+let speechInterimTimer = null;
+
 function setStatus(message, tone = 'default') {
   elements.statusText.textContent = message;
   if (tone === 'error') {
@@ -42,7 +49,6 @@ function setStatus(message, tone = 'default') {
 function setTaskButtonsEnabled(enabled) {
   if (elements.diffMethodButton) elements.diffMethodButton.disabled = !enabled;
   if (elements.pointElementButton) elements.pointElementButton.disabled = !enabled;
-  if (elements.historyButton) elements.historyButton.disabled = !enabled;
   if (elements.nextButton) elements.nextButton.disabled = !enabled;
 }
 
@@ -154,6 +160,102 @@ function resolveQuestion(mode, forceLast = false) {
   return '';
 }
 
+function stopVoiceInput() {
+  return stopVoiceInputInternal({ transcribe: true });
+}
+
+async function stopVoiceInputInternal({ transcribe }) {
+  if (speechInterimTimer) { clearInterval(speechInterimTimer); speechInterimTimer = null; }
+  if (!speechRecording && !speechTranscribing) return;
+  if (speechTranscribing) return;
+
+  speechRecording = false;
+  updateMicButtonState();
+
+  if (!transcribe) {
+    window.electronAPI.stopAudioCapture().catch(() => {});
+    setStatus('Voice input stopped.', 'default');
+    return;
+  }
+
+  speechTranscribing = true;
+  updateMicButtonState();
+  setStatus('Transcribing...', 'default');
+  try {
+    const wavBase64 = await window.electronAPI.stopAudioCapture();
+    if (!wavBase64) {
+      setStatus('Did not catch that. Try again.', 'default');
+      return;
+    }
+    const transcript = await window.electronAPI.transcribeLocalSpeech({ wavBase64, language: 'en' });
+    const text = String(transcript || '').trim();
+    if (!text) {
+      setStatus('Did not catch that. Try again.', 'default');
+      return;
+    }
+    const nextValue = [speechBaseText, text].filter(Boolean).join(' ').trim();
+    if (elements.questionInput) elements.questionInput.value = nextValue;
+    setStatus('Voice input captured.', 'success');
+  } catch (error) {
+    setStatus(error?.message || 'Voice transcription failed.', 'error');
+  } finally {
+    speechBaseText = '';
+    speechTranscribing = false;
+    updateMicButtonState();
+  }
+}
+
+function updateMicButtonState() {
+  if (!elements.micButton) {
+    return;
+  }
+  elements.micButton.classList.toggle('listening', speechRecording);
+  elements.micButton.disabled = speechTranscribing || !speechSupported;
+  if (!speechSupported) {
+    elements.micButton.title = 'Local voice input is unavailable';
+  } else if (speechTranscribing) {
+    elements.micButton.title = 'Transcribing...';
+  } else {
+    elements.micButton.title = speechRecording ? 'Stop voice input' : 'Start voice input';
+  }
+}
+
+async function pollInterimTranscript() {
+  if (speechInterimPending) return;
+  speechInterimPending = true;
+  try {
+    const wavBase64 = await window.electronAPI.getInterimAudio();
+    if (!wavBase64) return;
+    const transcript = await window.electronAPI.transcribeLocalSpeech({ wavBase64, language: 'en' });
+    const text = String(transcript || '').trim();
+    // Only write if no final transcription is running yet
+    if (text && !speechTranscribing && elements.questionInput) {
+      elements.questionInput.value = [speechBaseText, text].filter(Boolean).join(' ').trim();
+    }
+  } catch (_) {
+    // ignore interim errors silently
+  } finally {
+    speechInterimPending = false;
+  }
+}
+
+async function startVoiceInput() {
+  if (!speechSupported || speechRecording || speechTranscribing) return;
+  try {
+    speechBaseText = elements.questionInput?.value?.trim() || '';
+    await window.electronAPI.startAudioCapture();
+    speechRecording = true;
+    setTimeout(pollInterimTranscript, 700);
+    speechInterimTimer = setInterval(pollInterimTranscript, 2000);
+    updateMicButtonState();
+    setStatus('Listening...', 'default');
+  } catch (error) {
+    speechSupported = false;
+    updateMicButtonState();
+    setStatus(error?.message || 'Microphone unavailable.', 'error');
+  }
+}
+
 async function handleAsk(options = {}) {
   const question = options.emptyInput === true
     ? ''
@@ -171,6 +273,9 @@ async function handleAsk(options = {}) {
   try {
     if (appState.isRunningCua) {
       return;
+    }
+    if (speechRecording) {
+      await stopVoiceInputInternal({ transcribe: false });
     }
     stopCurrentAudio();
     if (elements.ttsToggleButton) elements.ttsToggleButton.disabled = true;
@@ -340,6 +445,26 @@ function bindEvents() {
   if (elements.askButton) {
     elements.askButton.addEventListener('click', handleAsk);
   }
+  if (elements.micButton) {
+    elements.micButton.addEventListener('click', async () => {
+      try {
+        if (!speechSupported) {
+          setStatus('Local voice input is unavailable.', 'error');
+          return;
+        }
+        if (speechRecording) {
+          await stopVoiceInputInternal({ transcribe: true });
+        } else {
+          await startVoiceInput();
+        }
+      } catch (error) {
+        speechRecording = false;
+        speechTranscribing = false;
+        updateMicButtonState();
+        setStatus(error?.message || 'Voice input failed unexpectedly.', 'error');
+      }
+    });
+  }
   if (elements.questionInput) {
     elements.questionInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -459,6 +584,7 @@ function bindEvents() {
 }
 
 function init() {
+  updateMicButtonState();
   registerSetStatus(setStatus);
   bindEvents();
   setAppMode(APP_MODES.GUIDE, { announce: false, triggerGuide: false });

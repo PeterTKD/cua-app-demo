@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runCuaQuestion: (payload) => ipcRenderer.invoke('cua-run', payload),
   runReasonerQuestion: (payload) => ipcRenderer.invoke('reasoner-run', payload),
   synthesizeSpeech: (payload) => ipcRenderer.invoke('tts-synthesize', payload),
+  transcribeLocalSpeech: (payload) => ipcRenderer.invoke('stt-transcribe-local', payload),
+  startAudioCapture: () => ipcRenderer.invoke('audio-start-capture'),
+  stopAudioCapture: () => ipcRenderer.invoke('audio-stop-capture'),
+  getInterimAudio: () => ipcRenderer.invoke('audio-interim'),
   closeApp: () => ipcRenderer.invoke('close-app'),
   onOSClick: (callback) => ipcRenderer.on('os-click', callback),
   onOSMouseDown: (callback) => ipcRenderer.on('os-mousedown', callback),
@@ -29,5 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onOSKeyDown: (callback) => ipcRenderer.on('os-keydown', callback),
   onOverlayNext: (callback) => ipcRenderer.on('overlay-next', callback),
   onCalloutComplete: (callback) => ipcRenderer.on('callout-complete', callback),
-  onMainWindowClosing: (callback) => ipcRenderer.on('main-window-closing', callback)
+  onMainWindowClosing: (callback) => ipcRenderer.on('main-window-closing', callback),
+  getReasonerModels: () => ipcRenderer.invoke('reasoner-get-models'),
+  getReasonerModel: () => ipcRenderer.invoke('reasoner-get-model'),
+  setReasonerModel: (modelId) => ipcRenderer.invoke('reasoner-set-model', modelId)
 });

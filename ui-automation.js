@@ -38,6 +38,12 @@ class UIAutomationDetector {
                 exit 0
             }
             
+            $rect = $element.Current.BoundingRectangle
+            $rectX = if ([double]::IsInfinity($rect.X) -or [double]::IsNaN($rect.X)) { 0 } else { $rect.X }
+            $rectY = if ([double]::IsInfinity($rect.Y) -or [double]::IsNaN($rect.Y)) { 0 } else { $rect.Y }
+            $rectWidth = if ([double]::IsInfinity($rect.Width) -or [double]::IsNaN($rect.Width)) { 0 } else { $rect.Width }
+            $rectHeight = if ([double]::IsInfinity($rect.Height) -or [double]::IsNaN($rect.Height)) { 0 } else { $rect.Height }
+
             $props = @{
                 Name = $element.Current.Name
                 ClassName = $element.Current.ClassName
@@ -47,10 +53,10 @@ class UIAutomationDetector {
                 IsEnabled = $element.Current.IsEnabled
                 IsOffscreen = $element.Current.IsOffscreen
                 BoundingRect = @{
-                    X = $element.Current.BoundingRectangle.X
-                    Y = $element.Current.BoundingRectangle.Y
-                    Width = $element.Current.BoundingRectangle.Width
-                    Height = $element.Current.BoundingRectangle.Height
+                    X = $rectX
+                    Y = $rectY
+                    Width = $rectWidth
+                    Height = $rectHeight
                 }
             }
             

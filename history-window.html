@@ -16,12 +16,66 @@
             box-sizing: border-box;
         }
 
+        html, body {
+            height: 100%;
+            overflow-y: auto;
+        }
+
         body {
             margin: 0;
             font-family: "Trebuchet MS", "Segoe UI", sans-serif;
             background: #f5f7fb;
             color: var(--ink-1);
         }
+
+        .sticky-model-bar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            background: #f5f7fb;
+            border-bottom: 1px solid var(--border);
+            padding: 8px 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sticky-model-bar label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--ink-2);
+            white-space: nowrap;
+        }
+
+        .sticky-model-bar select {
+            flex: 1;
+            padding: 5px 10px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #ffffff;
+            color: var(--ink-1);
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .sticky-model-bar select:focus {
+            border-color: #94a3b8;
+        }
+
+        .model-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-weight: 700;
+            color: #ffffff;
+            white-space: nowrap;
+        }
+
+        .model-badge.gpt { background: #10a37f; }
+        .model-badge.claude { background: #d97757; }
+        .model-badge.grok { background: #1a1a2e; }
 
         .history {
             padding: 18px;
@@ -159,6 +213,11 @@
     </style>
 </head>
 <body>
+    <div class="sticky-model-bar">
+        <label for="modelSelect">Reasoner Model</label>
+        <select id="modelSelect"></select>
+        <span class="model-badge" id="modelBadge"></span>
+    </div>
     <div class="history">
         <div class="header">
             <h2>Question history</h2>

@@ -1,3 +1,54 @@
+// Model selector initialization
+async function initModelSelector() {
+  try {
+    const [models, currentId] = await Promise.all([
+      window.historyAPI.getModels(),
+      window.historyAPI.getModel()
+    ]);
+
+    const select = document.getElementById('modelSelect');
+    const badge = document.getElementById('modelBadge');
+
+    // Group models
+    const groups = {};
+    models.forEach(m => {
+      if (!groups[m.group]) groups[m.group] = [];
+      groups[m.group].push(m);
+    });
+
+    Object.entries(groups).forEach(([groupName, groupModels]) => {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = groupName;
+      groupModels.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.label;
+        if (m.id === currentId) opt.selected = true;
+        optgroup.appendChild(opt);
+      });
+      select.appendChild(optgroup);
+    });
+
+    function updateBadge(modelId) {
+      const m = models.find(x => x.id === modelId);
+      if (!m || !badge) return;
+      badge.textContent = m.group;
+      badge.className = 'model-badge ' + m.group.toLowerCase();
+    }
+    updateBadge(currentId);
+
+    select.addEventListener('change', async () => {
+      const newId = select.value;
+      await window.historyAPI.setModel(newId);
+      updateBadge(newId);
+    });
+  } catch (err) {
+    console.error('Model selector init failed:', err);
+  }
+}
+
+initModelSelector();
+
 function renderHistory(items) {
   const list = document.getElementById('historyList');
   list.textContent = '';
@@ -9,12 +60,6 @@ function renderHistory(items) {
     list.appendChild(empty);
     return;
   }
-
-  const PRICE_PER_MILLION = {
-    reasoner: { input: 1.75, output: 14, label: 'GPT-5.2' },
-    cua: { input: 3, output: 12, label: 'CUA' },
-    tts: { input: 0.6, output: 12, label: 'GPT-4o-mini-tts' }
-  };
 
   const extractUsageTotals = (response) => {
     if (!response) return null;
@@ -152,22 +197,31 @@ function renderHistory(items) {
     const ttsOutput = ttsWasEnabled ? ttsInput : 0;
     const ttsTotal = ttsInput + ttsOutput;
 
-    const reasonerCost = computeCost({ input: reasonerUsage.input, output: reasonerUsage.output }, PRICE_PER_MILLION.reasoner);
-    const cuaCost = computeCost({ input: cuaInput, output: cuaOutput }, PRICE_PER_MILLION.cua);
+    // Dynamic pricing from reasoner response _meta, with fallback defaults
+    const reasonerMeta = item.reasonerResponse?._meta;
+    const reasonerPricing = reasonerMeta?.pricing || { input: 1.75, output: 14 };
+    const reasonerLabel = reasonerMeta?.label || 'Reasoner';
+    const cuaLabel = 'CUA';
+    const cuaPricing = { input: 3, output: 12 };
+    const ttsPricing = { input: 0.6, output: 12 };
+    const ttsLabel = 'GPT-4o-mini-tts';
+
+    const reasonerCost = computeCost({ input: reasonerUsage.input, output: reasonerUsage.output }, reasonerPricing);
+    const cuaCost = computeCost({ input: cuaInput, output: cuaOutput }, cuaPricing);
     const ttsCost = ttsWasEnabled
-      ? computeCost({ input: ttsInput, output: ttsOutput }, PRICE_PER_MILLION.tts)
+      ? computeCost({ input: ttsInput, output: ttsOutput }, ttsPricing)
       : 0;
 
     const models = [
       {
-        model: PRICE_PER_MILLION.reasoner.label,
+        model: reasonerLabel,
         input: reasonerUsage.input,
         output: reasonerUsage.output,
         total: reasonerUsage.total,
         cost: reasonerCost
       },
       {
-        model: PRICE_PER_MILLION.cua.label,
+        model: cuaLabel,
         input: cuaInput,
         output: cuaOutput,
         total: cuaTotal,
@@ -176,7 +230,7 @@ function renderHistory(items) {
     ];
     if (ttsWasEnabled) {
       models.push({
-        model: `${PRICE_PER_MILLION.tts.label} (est)`,
+        model: `${ttsLabel} (est)`,
         input: ttsInput,
         output: ttsOutput,
         total: ttsTotal,
@@ -192,10 +246,7 @@ function renderHistory(items) {
       totalCost: reasonerCost + cuaCost + ttsCost
     };
 
-    const totalRuntimeMs = (Number(item.reasonerDurationMs) || 0)
-      + (Array.isArray(item.cuaResponses)
-        ? item.cuaResponses.reduce((sum, entry) => sum + (Number(entry.durationMs) || 0), 0)
-        : 0);
+    const totalRuntimeMs = (Number(item.reasonerDurationMs) || 0) + (Number(item.cuaElapsedMs) || 0);
 
     const summary = document.createElement('div');
     summary.className = 'summary';

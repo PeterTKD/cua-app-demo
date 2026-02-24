@@ -2,6 +2,7 @@ export const elements = {
   widget: document.getElementById('assistantWidget'),
   modeBadge: document.getElementById('modeBadge'),
   questionInput: document.getElementById('questionInput'),
+  micButton: document.getElementById('micBtn'),
   askButton: document.getElementById('askBtn'),
   diffMethodButton: document.getElementById('diffMethodBtn'),
   pointElementButton: document.getElementById('pointElementBtn'),

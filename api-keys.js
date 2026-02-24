@@ -58,6 +58,18 @@ function getApiKey(serviceKeyName) {
   return null;
 }
 
+function getProviderApiKey(keyName) {
+  if (process.env[keyName]) {
+    return process.env[keyName];
+  }
+  const bundled = loadBundledApiKeys();
+  if (bundled[keyName]) {
+    return bundled[keyName];
+  }
+  return null;
+}
+
 module.exports = {
-  getApiKey
+  getApiKey,
+  getProviderApiKey
 };

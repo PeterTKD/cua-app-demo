@@ -1,0 +1,174 @@
+PID 188656 received SIGSEGV for address: 0x5dca5369
+SymInit: Symbol-SearchPath: '.;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\electron\dist;C:\Windows;C:\Windows\system32;SRV*C:\websymbols*http://msdl.microsoft.com/download/symbols;', symOptions: 530, UserName: '365 Company'
+OS-Version: 10.0.19045 () 0x100-0x1
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\StackWalker.cpp (941): StackWalker::ShowCallstack
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\segfault-handler.cpp (242): segfault_handler
+00007FFB60169B4C (ntdll): (filename not available): RtlDeleteAce
+00007FFB60142376 (ntdll): (filename not available): RtlRaiseException
+00007FFB601422A7 (ntdll): (filename not available): RtlRaiseException
+00007FFB5DCA5369 (KERNELBASE): (filename not available): RaiseException
+00007FFB5E6FA780 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA744 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E776F49 (RPCRT4): (filename not available): NdrMesSimpleTypeEncodeAll
+00007FFB5E779C70 (RPCRT4): (filename not available): NdrClientCall3
+00007FFB5C3F7788 (WINSTA): (filename not available): WinStationNameFromLogonIdW
+00007FFB5C3F9A86 (WINSTA): (filename not available): WinStationQueryCurrentSessionInformation
+00007FFB5C3F99DE (WINSTA): (filename not available): WinStationQueryCurrentSessionInformation
+00007FFB5C3F7CDD (WINSTA): (filename not available): WinStationNameFromLogonIdW
+00007FFB5C3F8296 (WINSTA): (filename not available): WinStationQueryInformationW
+00007FFB571D15E3 (WTSAPI32): (filename not available): WTSQuerySessionInformationW
+00007FF6A53BD967 (electron): (filename not available): sqlite3_dbdata_init
+00007FF6A0BB1F8A (electron): (filename not available): GetHandleVerifier
+00007FF6A04AD175 (electron): (filename not available): uv_fs_get_system_error
+00007FF69F916A2D (electron): (filename not available): uv_fs_get_path
+00007FF69FFDE2C0 (electron): (filename not available): uv_os_getpid
+00007FF6A2809F0B (electron): (filename not available): cppgc::internal::WriteBarrier::DijkstraMarkingBarrierRangeSlow
+00007FF6A28CFEA7 (electron): (filename not available): Cr_z_adler32
+00007FF6A27FAB95 (electron): (filename not available): cppgc::internal::WriteBarrier::DijkstraMarkingBarrierRangeSlow
+00007FF69FFCB95D (electron): (filename not available): uv_os_getpid
+00007FF6A06D0AE9 (electron): (filename not available): GetHandleVerifier
+00007FF69FFF6528 (electron): (filename not available): uv_os_getpid
+00007FF69F708312 (electron): (filename not available): uv_fs_get_path
+00007FF69F70A1A1 (electron): (filename not available): uv_fs_get_path
+00007FF69F7053B1 (electron): (filename not available): uv_fs_get_path
+00007FF69E8CFB12 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8D0EB4 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8D0C34 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CCF70 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CD0ED (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E60E205 (electron): (filename not available): std::__Cr::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >
+00007FF6A2CC0D92 (electron): (filename not available): Cr_z_adler32
+00007FFB5FFF7374 (KERNEL32): (filename not available): BaseThreadInitThunk
+00007FFB6013CC91 (ntdll): (filename not available): RtlUserThreadStart
+PID 188656 received SIGSEGV for address: 0x5dca5369
+SymInit: Symbol-SearchPath: '.;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\electron\dist;C:\Windows;C:\Windows\system32;SRV*C:\websymbols*http://msdl.microsoft.com/download/symbols;', symOptions: 530, UserName: '365 Company'
+OS-Version: 10.0.19045 () 0x100-0x1
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\StackWalker.cpp (941): StackWalker::ShowCallstack
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\segfault-handler.cpp (242): segfault_handler
+00007FFB60169B4C (ntdll): (filename not available): RtlDeleteAce
+00007FFB60142376 (ntdll): (filename not available): RtlRaiseException
+00007FFB601422A7 (ntdll): (filename not available): RtlRaiseException
+00007FFB5DCA5369 (KERNELBASE): (filename not available): RaiseException
+00007FFB5E6FA780 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA744 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA71C (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6FA6F8 (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6A285F (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E77B55D (RPCRT4): (filename not available): Ndr64AsyncServerCallAll
+00007FFB5E6A2420 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E6A2338 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5C3F28A4 (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F26CD (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F265D (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5E6CF153 (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E6CEFEA (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E70527B (RPCRT4): (filename not available): RpcSsContextLockExclusive
+00007FFB5E708540 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E708359 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E7081A8 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E709316 (RPCRT4): (filename not available): RpcAsyncCancelCall
+00007FFB5C3F1CFC (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B67 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B06 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1F1E (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB5C3F1E41 (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB571D22E3 (WTSAPI32): (filename not available): WTSUnRegisterSessionNotification
+00007FF6A13FAD1C (electron): (filename not available): uv_stream_set_blocking
+00007FF6A13FAC7A (electron): (filename not available): uv_stream_set_blocking
+00007FF6A001CE72 (electron): (filename not available): uv_os_getpid
+00007FF6A001CC68 (electron): (filename not available): uv_os_getpid
+00007FF69E8D1371 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CCF7A (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CD0ED (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E60E205 (electron): (filename not available): std::__Cr::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >
+00007FF6A2CC0D92 (electron): (filename not available): Cr_z_adler32
+00007FFB5FFF7374 (KERNEL32): (filename not available): BaseThreadInitThunk
+00007FFB6013CC91 (ntdll): (filename not available): RtlUserThreadStart
+PID 199208 received SIGSEGV for address: 0x5dca5369
+SymInit: Symbol-SearchPath: '.;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\electron\dist;C:\Windows;C:\Windows\system32;SRV*C:\websymbols*http://msdl.microsoft.com/download/symbols;', symOptions: 530, UserName: '365 Company'
+OS-Version: 10.0.19045 () 0x100-0x1
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\StackWalker.cpp (941): StackWalker::ShowCallstack
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\segfault-handler.cpp (242): segfault_handler
+00007FFB60169B4C (ntdll): (filename not available): RtlDeleteAce
+00007FFB60142376 (ntdll): (filename not available): RtlRaiseException
+00007FFB601422A7 (ntdll): (filename not available): RtlRaiseException
+00007FFB5DCA5369 (KERNELBASE): (filename not available): RaiseException
+00007FFB5E6FA780 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA744 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA71C (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6FA6F8 (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6A285F (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E77B55D (RPCRT4): (filename not available): Ndr64AsyncServerCallAll
+00007FFB5E6A2420 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E6A2338 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5C3F28A4 (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F26CD (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F265D (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5E6CF153 (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E6CEFEA (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E70527B (RPCRT4): (filename not available): RpcSsContextLockExclusive
+00007FFB5E708540 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E708359 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E7081A8 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E709316 (RPCRT4): (filename not available): RpcAsyncCancelCall
+00007FFB5C3F1CFC (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B67 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B06 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1F1E (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB5C3F1E41 (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB571D22E3 (WTSAPI32): (filename not available): WTSUnRegisterSessionNotification
+00007FF6A13FAD1C (electron): (filename not available): uv_stream_set_blocking
+00007FF6A13FAC7A (electron): (filename not available): uv_stream_set_blocking
+00007FF6A001CE72 (electron): (filename not available): uv_os_getpid
+00007FF6A001CC68 (electron): (filename not available): uv_os_getpid
+00007FF69E8D1371 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CCF7A (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CD0ED (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E60E205 (electron): (filename not available): std::__Cr::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >
+00007FF6A2CC0D92 (electron): (filename not available): Cr_z_adler32
+00007FFB5FFF7374 (KERNEL32): (filename not available): BaseThreadInitThunk
+00007FFB6013CC91 (ntdll): (filename not available): RtlUserThreadStart
+PID 212128 received SIGSEGV for address: 0x5dca5369
+SymInit: Symbol-SearchPath: '.;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation;C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\electron\dist;C:\Windows;C:\Windows\system32;SRV*C:\websymbols*http://msdl.microsoft.com/download/symbols;', symOptions: 530, UserName: '365 Company'
+OS-Version: 10.0.19045 () 0x100-0x1
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\StackWalker.cpp (941): StackWalker::ShowCallstack
+C:\Users\365 Company\Desktop\Electron JS\electron-screen-share-with-draw-overlay-feature-windows-ui-automation\node_modules\segfault-handler\src\segfault-handler.cpp (242): segfault_handler
+00007FFB60169B4C (ntdll): (filename not available): RtlDeleteAce
+00007FFB60142376 (ntdll): (filename not available): RtlRaiseException
+00007FFB601422A7 (ntdll): (filename not available): RtlRaiseException
+00007FFB5DCA5369 (KERNELBASE): (filename not available): RaiseException
+00007FFB5E6FA780 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA744 (RPCRT4): (filename not available): RpcRaiseException
+00007FFB5E6FA71C (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6FA6F8 (RPCRT4): (filename not available): I_RpcSendReceive
+00007FFB5E6A285F (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E77B55D (RPCRT4): (filename not available): Ndr64AsyncServerCallAll
+00007FFB5E6A2420 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5E6A2338 (RPCRT4): (filename not available): RpcAsyncCompleteCall
+00007FFB5C3F28A4 (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F26CD (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5C3F265D (WINSTA): (filename not available): WinStationRegisterConsoleNotification
+00007FFB5E6CF153 (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E6CEFEA (RPCRT4): (filename not available): RpcServerRegisterAuthInfoW
+00007FFB5E70527B (RPCRT4): (filename not available): RpcSsContextLockExclusive
+00007FFB5E708540 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E708359 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E7081A8 (RPCRT4): (filename not available): RpcBindingFromStringBindingA
+00007FFB5E709316 (RPCRT4): (filename not available): RpcAsyncCancelCall
+00007FFB5C3F1CFC (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B67 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1B06 (WINSTA): (filename not available): WinStationRegisterCurrentSessionNotificationEvent
+00007FFB5C3F1F1E (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB5C3F1E41 (WINSTA): (filename not available): WinStationUnRegisterConsoleNotification
+00007FFB571D22E3 (WTSAPI32): (filename not available): WTSUnRegisterSessionNotification
+00007FF6A13FAD1C (electron): (filename not available): uv_stream_set_blocking
+00007FF6A13FAC7A (electron): (filename not available): uv_stream_set_blocking
+00007FF6A001CE72 (electron): (filename not available): uv_os_getpid
+00007FF6A001CC68 (electron): (filename not available): uv_os_getpid
+00007FF69E8D1371 (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CCF7A (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E8CD0ED (electron): (filename not available): v8::ScriptCompiler::ScriptStreamingTask::ScriptStreamingTask
+00007FF69E60E205 (electron): (filename not available): std::__Cr::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >::vector<v8::CpuProfileDeoptInfo,std::__Cr::allocator<v8::CpuProfileDeoptInfo> >
+00007FF6A2CC0D92 (electron): (filename not available): Cr_z_adler32
+00007FFB5FFF7374 (KERNEL32): (filename not available): BaseThreadInitThunk
+00007FFB6013CC91 (ntdll): (filename not available): RtlUserThreadStart

@@ -62,7 +62,7 @@ Return exactly ONE JSON object with these keys:
   "cua_calls": [ // if you have multiple CUA calls in case of walking through the user on the screen the order of presenting should be kept here! Use multiple calls only if the screen won't change.
     {
       "action": "click" | "double_click" | "drag" | "scroll" | "scroll_up" | "scroll_down" | "keypress" | "type" | "wait" | "pinpoint",
-      "action-callout": string // When having an action always add call out for this action when having a pinpoint it should be explanation.
+      "action-callout": string, // When having an action always add call out for this action when having a pinpoint it should be explanation.
       "target_description": string, // it is verry important to describe to the CUA in detail what the action should be, also you should instruct the computer use to perform it e.g if you'd like the CUA to show click at the user icon you say "Click the user icon at the bottom left screen under the settings button"
     }
   ]

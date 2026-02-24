@@ -480,12 +480,28 @@ export async function runCuaQuestion(question, options = {}) {
 
     const reasonerStart = Date.now();
     const reasonerImage = frame.reasonerDataUrl || frame.dataUrl;
-    const reasonerResponse = await window.electronAPI.runReasonerQuestion({
-      context: reasonerContext,
-      imageDataUrl: reasonerImage
-    });
-    const reasonerDurationMs = Date.now() - reasonerStart;
-    const reasonerJson = extractReasonerJson(reasonerResponse);
+    let reasonerResponse, reasonerDurationMs, reasonerJson;
+    try {
+      reasonerResponse = await window.electronAPI.runReasonerQuestion({
+        context: reasonerContext,
+        imageDataUrl: reasonerImage
+      });
+      reasonerDurationMs = Date.now() - reasonerStart;
+      reasonerJson = extractReasonerJson(reasonerResponse);
+    } catch (reasonerError) {
+      addHistoryItem({
+        question: question || '(auto)',
+        screenshot: frame.dataUrl,
+        answer: `Error: ${reasonerError.message}`,
+        ttsEnabled: false,
+        actionType: 'error',
+        actionSummary: null,
+        reasonerResponse: reasonerResponse || null,
+        reasonerDurationMs: Date.now() - reasonerStart,
+        cuaResponses: []
+      });
+      throw reasonerError;
+    }
     const isTaskCompleted = typeof reasonerJson.answer === 'string'
       && reasonerJson.answer.includes('<<TASK_COMPLETED>>');
     const plannedCalls = Array.isArray(reasonerJson.cua_calls) ? reasonerJson.cua_calls : [];
@@ -512,6 +528,7 @@ export async function runCuaQuestion(question, options = {}) {
 
     let result = { action: null, summary: null, hasPointer: false, actionType: 'callout' };
     const cuaResponses = [];
+    let cuaElapsedMs = 0;
 
     if (calloutOnly) {
       if (isTaskCompleted) {
@@ -541,9 +558,11 @@ export async function runCuaQuestion(question, options = {}) {
         ? cuaCalls.filter((call) => call.action === 'pinpoint')
         : cuaCalls;
 
+      const cuaStart = Date.now();
       const cuaResults = await Promise.all(
         filteredCalls.map((call) => runCuaInstruction({ call, frame, strict: false }))
       );
+      cuaElapsedMs = Date.now() - cuaStart;
 
       const discrepancyDetected = cuaResults.some((item, index) => {
         const expectedAction = filteredCalls[index]?.action || null;
@@ -607,6 +626,7 @@ export async function runCuaQuestion(question, options = {}) {
       actionSummary: result.summary || null,
       reasonerResponse: reasonerResponse,
       reasonerDurationMs,
+      cuaElapsedMs,
       cuaResponses
     });
 

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Audio Worker</title></head>
+<body>
+<script>
+  let stream = null;
+  let mediaRecorder = null;
+  let chunks = [];
+
+  function floatTo16BitPCM(buf) {
+    const pcm = new Int16Array(buf.length);
+    for (let i = 0; i < buf.length; i++) {
+      const s = Math.max(-1, Math.min(1, buf[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return pcm;
+  }
+
+  function encodeWav(floatBuf, sr) {
+    const pcm = floatTo16BitPCM(floatBuf);
+    const dataSize = pcm.length * 2;
+    const ab = new ArrayBuffer(44 + dataSize);
+    const v = new DataView(ab);
+    const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    str(0, 'RIFF'); v.setUint32(4, 36 + dataSize, true);
+    str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, dataSize, true);
+    let o = 44;
+    for (let i = 0; i < pcm.length; i++) { v.setInt16(o, pcm[i], true); o += 2; }
+    return new Uint8Array(ab);
+  }
+
+  function bytesToBase64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  window.audioWorkerAPI.onStartCapture(async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 1 }
+        }
+      });
+      chunks = [];
+
+      // Use MediaRecorder instead of ScriptProcessorNode to avoid WASAPI crashes
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+        .find(t => MediaRecorder.isTypeSupported(t)) || '';
+
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      mediaRecorder.start(200);
+      window.audioWorkerAPI.sendReady();
+    } catch (err) {
+      window.audioWorkerAPI.sendError(err.message || 'Microphone access failed');
+    }
+  });
+
+  window.audioWorkerAPI.onStopCapture(async () => {
+    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      window.audioWorkerAPI.sendData('');
+      return;
+    }
+
+    mediaRecorder.onstop = async () => {
+      // Capture mimeType before clearing state
+      const mimeType = mediaRecorder.mimeType || 'audio/webm';
+      mediaRecorder = null;
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+      if (!chunks.length) {
+        window.audioWorkerAPI.sendData('');
+        return;
+      }
+
+      try {
+        const blob = new Blob(chunks, { type: mimeType });
+        chunks = [];
+
+        // Decode the compressed audio blob to raw PCM using AudioContext.
+        // decodeAudioData is purely software — it does NOT touch WASAPI or hardware.
+        const arrayBuf = await blob.arrayBuffer();
+        const audioCtx = new AudioContext();
+        const decoded = await audioCtx.decodeAudioData(arrayBuf);
+        await audioCtx.close().catch(() => {});
+
+        // Mono channel 0; keep native sample rate so Whisper can resample if needed
+        const floatData = decoded.getChannelData(0);
+        window.audioWorkerAPI.sendData(bytesToBase64(encodeWav(floatData, decoded.sampleRate)));
+      } catch (err) {
+        window.audioWorkerAPI.sendError('Audio conversion failed: ' + (err.message || String(err)));
+      }
+    };
+
+    mediaRecorder.stop();
+  });
+</script>
+</body>
+</html>
