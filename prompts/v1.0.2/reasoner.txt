@@ -81,7 +81,7 @@ OUTPUT FORMAT (STRICT)
 Return exactly one JSON object in this shape:
 
 {
-
+  "thought": string // Thought is optional used only for complex or multi-step tasks. 
   "answer": string, // Your answer to the user make the text in markdown. Avoid using Headings. Make the text here shorter as it is  going to be passed to a tts model that is going to speak out this text.
   "actions": [ // If you decide to include action always fill this parameter. If you use Computer use leve the uia_target empty. Else fill everything
     {
@@ -108,6 +108,10 @@ Return exactly one JSON object in this shape:
 }
 
 Field meaning:
+- thought: include only the most useful observations needed for future context, such as:
+    - how the current screen differs from the previous one
+    - whether the previous step appears completed correctly
+    - whether the user may be stuck in a loop or repeating the same action without progress
 - answer: 
 - actions: always include this array. Use [] when no action is needed.
 - action_type: the next action the user should take or the next element to highlight.

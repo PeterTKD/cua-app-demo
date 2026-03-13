@@ -60,6 +60,23 @@ function buildFullSystemPrompt() {
   return loadReasonerPrompt();
 }
 
+function buildReasonerDeveloperText(context) {
+  const thought = typeof context?.developer_context === 'string'
+    ? context.developer_context.trim()
+    : '';
+  if (!thought) {
+    return '';
+  }
+
+  return [
+    'Previous hidden continuity note from the prior reasoner turn:',
+    thought,
+    '',
+    'Use this only as internal context for the next step.',
+    'Do not mention or quote it unless it is directly useful to the user.'
+  ].join('\n');
+}
+
 function buildReasonerUserText(context) {
   const lines = [];
   const userMessage = context?.user_message ? String(context.user_message) : '';
@@ -138,7 +155,7 @@ function buildConversationMessages(context, userText) {
 
 // --- Payload builders ---
 
-function buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl) {
+function buildOpenAIResponsesPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl) {
   const input = conversationMessages.map((message, index) => {
     const content = [{
       type: message.role === 'assistant' ? 'output_text' : 'input_text',
@@ -152,6 +169,16 @@ function buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessa
       content
     };
   });
+
+  if (developerText) {
+    input.unshift({
+      role: 'developer',
+      content: [{
+        type: 'input_text',
+        text: developerText
+      }]
+    });
+  }
 
   const payload = {
     model: config.id,
@@ -171,12 +198,12 @@ function buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessa
 
 // Anthropic payload + normalization live in anthropic-client.js (tool use / structured output)
 
-function buildPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl) {
+function buildPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl) {
   switch (config.provider) {
     case 'openai-responses':
-      return buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
+      return buildOpenAIResponsesPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
     case 'anthropic':
-      return buildAnthropicPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
+      return buildAnthropicPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }
@@ -261,9 +288,10 @@ async function runReasonerQuestion({ context, imageDataUrl }) {
   }
 
   const fullSystemPrompt = buildFullSystemPrompt();
+  const developerText = buildReasonerDeveloperText(context);
   const userText = buildReasonerUserText(context);
   const conversationMessages = buildConversationMessages(context, userText);
-  const payload = buildPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
+  const payload = buildPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
   const headers = buildHeaders(config, apiKey);
 
   const response = await fetch(config.endpoint, {

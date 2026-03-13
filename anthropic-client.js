@@ -9,6 +9,10 @@ const GUIDANCE_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
+      thought: {
+        type: 'string',
+        description: 'Optional hidden continuity note for future turns. Omit it when not needed.'
+      },
       answer: {
         type: 'string',
         description: 'Conversational reply to the user in markdown. Keep it concise — it is passed to TTS.'
@@ -74,11 +78,14 @@ const GUIDANCE_TOOL = {
   }
 };
 
-function buildAnthropicPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl) {
+function buildAnthropicPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl) {
   const match = imageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) {
     throw new Error('Invalid image data URL format for Anthropic provider');
   }
+  const systemPrompt = developerText
+    ? `${fullSystemPrompt}\n\nHidden continuity context:\n${developerText}`
+    : fullSystemPrompt;
   const messages = Array.isArray(conversationMessages) && conversationMessages.length > 0
     ? conversationMessages.map((message, index) => {
         const content = [{ type: 'text', text: message.text || 'Give next step' }];
@@ -101,7 +108,7 @@ function buildAnthropicPayload(config, fullSystemPrompt, conversationMessages, i
       ];
   return {
     model: config.id,
-    system: fullSystemPrompt,
+    system: systemPrompt,
     tools: [GUIDANCE_TOOL],
     tool_choice: { type: 'tool', name: 'guidance_response' },
     messages,

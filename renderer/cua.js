@@ -34,6 +34,7 @@ let queuedActions = [];
 let queuedFrame = null;
 let conversationHistory = [];
 let lastCalloutPayload = null;
+let lastReasonerThought = null;
 const DISCREPANCY_RETRY_LIMIT = 1;
 const UIA_SUPPORTED_ACTIONS = new Set(['click', 'double_click', 'pinpoint', 'type']);
 
@@ -226,7 +227,7 @@ async function buildTreeLocatorAction(call, frame) {
 
 function normalizeReasonerOutput(reasonerJson) {
   if (!reasonerJson || typeof reasonerJson !== 'object') {
-    return { answer: '', actions: [] };
+    return { thought: '', answer: '', actions: [] };
   }
   const rawActions = Array.isArray(reasonerJson.actions)
     ? reasonerJson.actions
@@ -235,6 +236,7 @@ function normalizeReasonerOutput(reasonerJson) {
       : [];
   return {
     ...reasonerJson,
+    thought: typeof reasonerJson.thought === 'string' ? reasonerJson.thought.trim() : '',
     answer: typeof reasonerJson.answer === 'string' ? reasonerJson.answer : '',
     actions: rawActions.map(normalizeReasonerAction).filter(Boolean)
   };
@@ -278,6 +280,7 @@ export function resetCuaState() {
   queuedActions = [];
   queuedFrame = null;
   lastCalloutPayload = null;
+  lastReasonerThought = null;
   clearTargetRect();
   clearCurrentAction();
 }
@@ -837,6 +840,9 @@ export async function runCuaQuestion(question, options = {}) {
         height: frame.height
       }
     };
+    if (lastReasonerThought) {
+      reasonerContext.developer_context = lastReasonerThought;
+    }
     if (options.mode) {
       reasonerContext.mode = options.mode;
     }
@@ -854,11 +860,13 @@ export async function runCuaQuestion(question, options = {}) {
       });
       reasonerDurationMs = Date.now() - reasonerStart;
       reasonerJson = normalizeReasonerOutput(extractReasonerJson(reasonerResponse));
+      lastReasonerThought = reasonerJson.thought || null;
     } catch (reasonerError) {
       addHistoryItem({
         question: question || '(auto)',
         screenshot: frame.dataUrl,
         answer: `Error: ${reasonerError.message}`,
+        thought: null,
         ttsEnabled: false,
         actionType: 'error',
         actionExecutor: null,
@@ -1046,6 +1054,7 @@ export async function runCuaQuestion(question, options = {}) {
       question: historyQuestion,
       screenshot: frame.dataUrl,
       answer: reasonerJson.answer || null,
+      thought: reasonerJson.thought || null,
       ttsEnabled: options.ttsEnabled === true,
       actionType: result.actionType || null,
       actionExecutor: result.executor || null,
@@ -1067,6 +1076,7 @@ export async function runCuaQuestion(question, options = {}) {
 
     return {
       answer: reasonerJson.answer || null,
+      thought: reasonerJson.thought || null,
       action: result.action,
       summary: result.summary,
       hasPointer: result.hasPointer,

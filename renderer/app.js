@@ -52,6 +52,18 @@ function setTaskButtonsEnabled(enabled) {
   if (elements.nextButton) elements.nextButton.disabled = !enabled;
 }
 
+async function logThoughtToTerminal(result) {
+  const thought = typeof result?.thought === 'string' ? result.thought.trim() : '';
+  if (!thought || !window.electronAPI?.logToTerminal) {
+    return;
+  }
+  try {
+    await window.electronAPI.logToTerminal(`[THOUGHT] ${thought}`);
+  } catch (_) {
+    // Terminal logging is best-effort only.
+  }
+}
+
 async function startGuideKickoff(force = false) {
   if (appState.appMode !== APP_MODES.GUIDE || appState.isRunningCua) {
     return;
@@ -337,6 +349,9 @@ async function handleAsk(options = {}) {
     const result = await runCuaQuestion(question, runOptions);
     if (result && result.answer) {
       addChatMessage(result.answer, 'assistant');
+    }
+    await logThoughtToTerminal(result);
+    if (result && result.answer) {
       speakText(result.answer);
     }
     if (result && isGuidanceActionType(result.actionType)) {

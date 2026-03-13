@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runTreeLocator: (payload) => ipcRenderer.invoke('tree-locator-run', payload),
   synthesizeSpeech: (payload) => ipcRenderer.invoke('tts-synthesize', payload),
   transcribeLocalSpeech: (payload) => ipcRenderer.invoke('stt-transcribe-local', payload),
+  logToTerminal: (message) => ipcRenderer.invoke('log-to-terminal', message),
   startAudioCapture: () => ipcRenderer.invoke('audio-start-capture'),
   stopAudioCapture: () => ipcRenderer.invoke('audio-stop-capture'),
   getInterimAudio: () => ipcRenderer.invoke('audio-interim'),

@@ -365,7 +365,8 @@ function renderHistory(items) {
       },
       reasoner: item.reasonerResponse || null,
       grok: item.treeLocatorResponses || [],
-      cua: item.cuaResponses || []
+      cua: item.cuaResponses || [],
+      thought: item.thought || null
     };
     pre.textContent = JSON.stringify(payload, null, 2);
     wrapper.appendChild(pre);

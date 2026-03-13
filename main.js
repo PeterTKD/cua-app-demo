@@ -122,6 +122,22 @@ function promoteWidgetWindow(win, { visibleOnAllWorkspaces = true } = {}) {
   }
 }
 
+function promoteMainWindow({ force = false } = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  if (typeof mainWindow.isVisible === 'function' && !mainWindow.isVisible()) {
+    return;
+  }
+
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (!force && focusedWindow && focusedWindow !== mainWindow) {
+    return;
+  }
+
+  promoteWidgetWindow(mainWindow);
+}
+
 function getScaleFactorSafe(display) {
   return display?.scaleFactor || 1;
 }
@@ -640,7 +656,7 @@ ipcMain.handle('set-widget-visible', async (event, isVisible) => {
     return false;
   }
   if (isVisible) {
-    promoteWidgetWindow(mainWindow);
+    promoteMainWindow({ force: true });
     mainWindow.show();
   } else {
     mainWindow.hide();
@@ -838,7 +854,7 @@ function createWindow() {
       contextIsolation: true
     }
   });
-  promoteWidgetWindow(mainWindow);
+  promoteMainWindow({ force: true });
 
   // Enable screen sharing and microphone access
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -866,6 +882,20 @@ function createWindow() {
   mainWindow.on('close', function (e) {
     // Notify renderer to clean up streams
     safeSendToMain('main-window-closing');
+  });
+
+  mainWindow.on('show', () => {
+    promoteMainWindow({ force: true });
+  });
+
+  mainWindow.on('focus', () => {
+    promoteMainWindow({ force: true });
+  });
+
+  mainWindow.on('blur', () => {
+    setTimeout(() => {
+      promoteMainWindow();
+    }, 120);
   });
 
   mainWindow.on('closed', function () {
@@ -950,6 +980,7 @@ ipcMain.handle('resize-widget', async (event, size) => {
   if (nextY > maxY) nextY = maxY;
 
   mainWindow.setBounds({ x: nextX, y: nextY, width: nextWidth, height: nextHeight }, false);
+  promoteMainWindow({ force: true });
   return true;
 });
 
@@ -1018,6 +1049,7 @@ async function captureNativeScreenshot() {
     return null;
   } finally {
     appWindows.forEach(w => w.setOpacity(1));
+    promoteMainWindow({ force: true });
   }
 }
 
@@ -1043,6 +1075,14 @@ ipcMain.handle('reasoner-run', async (event, payload) => {
     console.error('Reasoner error:', error);
     throw error;
   }
+});
+
+ipcMain.handle('log-to-terminal', async (event, message) => {
+  const text = typeof message === 'string' ? message.trim() : '';
+  if (text) {
+    console.log(text);
+  }
+  return true;
 });
 
 ipcMain.handle('tree-locator-run', async (event, payload) => {
