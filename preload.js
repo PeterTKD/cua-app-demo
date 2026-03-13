@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideElementHighlight: () => ipcRenderer.invoke('hide-element-highlight'),
   runCuaQuestion: (payload) => ipcRenderer.invoke('cua-run', payload),
   runReasonerQuestion: (payload) => ipcRenderer.invoke('reasoner-run', payload),
+  runTreeLocator: (payload) => ipcRenderer.invoke('tree-locator-run', payload),
   synthesizeSpeech: (payload) => ipcRenderer.invoke('tts-synthesize', payload),
   transcribeLocalSpeech: (payload) => ipcRenderer.invoke('stt-transcribe-local', payload),
   startAudioCapture: () => ipcRenderer.invoke('audio-start-capture'),

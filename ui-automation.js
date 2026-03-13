@@ -154,6 +154,12 @@ class UIAutomationDetector {
             $result = @()
             foreach ($element in $elements) {
                 try {
+                    $rect = $element.Current.BoundingRectangle
+                    $rectX = if ([double]::IsInfinity($rect.X) -or [double]::IsNaN($rect.X)) { 0 } else { $rect.X }
+                    $rectY = if ([double]::IsInfinity($rect.Y) -or [double]::IsNaN($rect.Y)) { 0 } else { $rect.Y }
+                    $rectWidth = if ([double]::IsInfinity($rect.Width) -or [double]::IsNaN($rect.Width)) { 0 } else { $rect.Width }
+                    $rectHeight = if ([double]::IsInfinity($rect.Height) -or [double]::IsNaN($rect.Height)) { 0 } else { $rect.Height }
+
                     $result += @{
                         Name = $element.Current.Name
                         ClassName = $element.Current.ClassName
@@ -161,10 +167,10 @@ class UIAutomationDetector {
                         AutomationId = $element.Current.AutomationId
                         IsEnabled = $element.Current.IsEnabled
                         BoundingRect = @{
-                            X = $element.Current.BoundingRectangle.X
-                            Y = $element.Current.BoundingRectangle.Y
-                            Width = $element.Current.BoundingRectangle.Width
-                            Height = $element.Current.BoundingRectangle.Height
+                            X = $rectX
+                            Y = $rectY
+                            Width = $rectWidth
+                            Height = $rectHeight
                         }
                     }
                 } catch {}
@@ -699,6 +705,278 @@ class UIAutomationDetector {
           } else {
             const result = JSON.parse(trimmedOutput);
             resolve(result);
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse result: ${e.message}`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Get the active/topmost valid window on the selected display while ignoring this app's own windows.
+   * @param {{x:number,y:number,width:number,height:number}|null} displayBounds
+   * @param {number|null} appPid
+   * @param {string[]|null} ignoredTitlePatterns
+   * @returns {Promise<Object|null>}
+   */
+  async getForegroundWindow(displayBounds = null, appPid = null, ignoredTitlePatterns = null) {
+    if (!this.isWindows) {
+      throw new Error('UI Automation is only available on Windows');
+    }
+
+    const bounds = displayBounds && typeof displayBounds === 'object'
+      ? {
+          x: Number(displayBounds.x ?? 0),
+          y: Number(displayBounds.y ?? 0),
+          width: Number(displayBounds.width ?? 0),
+          height: Number(displayBounds.height ?? 0)
+        }
+      : null;
+    const safePid = Number.isFinite(Number(appPid)) ? Number(appPid) : null;
+    const titlePatterns = Array.isArray(ignoredTitlePatterns)
+      ? ignoredTitlePatterns.map((value) => String(value).toLowerCase()).filter(Boolean)
+      : [];
+
+    return new Promise((resolve, reject) => {
+      const psScript = `
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        Add-Type -AssemblyName WindowsBase
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class User32 {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")]
+  public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+  [DllImport("user32.dll")]
+  public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+  [DllImport("user32.dll")]
+  public static extern long GetWindowLongPtr(IntPtr hWnd, int nIndex);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+  [DllImport("user32.dll")]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  public const int GWL_EXSTYLE = -20;
+  public const long WS_EX_TOOLWINDOW = 0x00000080L;
+  public const uint GA_ROOT = 2;
+}
+"@
+
+        try {
+            $displayX = ${bounds ? bounds.x : 0}
+            $displayY = ${bounds ? bounds.y : 0}
+            $displayWidth = ${bounds ? bounds.width : 0}
+            $displayHeight = ${bounds ? bounds.height : 0}
+            $hasDisplayFilter = $displayWidth -gt 0 -and $displayHeight -gt 0
+            $appPid = ${safePid ?? '$null'}
+            $ignoredTitlePatterns = @(${titlePatterns.map((pattern) => `'${pattern.replace(/'/g, "''")}'`).join(', ')})
+
+            $ignoredProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+            if ($appPid) {
+                $ignoredProcessIds.Add([int]$appPid) | Out-Null
+                try {
+                    $appProcess = Get-Process -Id $appPid -ErrorAction SilentlyContinue
+                    if ($appProcess) {
+                        Get-Process -Name $appProcess.ProcessName -ErrorAction SilentlyContinue | ForEach-Object {
+                            $ignoredProcessIds.Add([int]$_.Id) | Out-Null
+                        }
+                    }
+                } catch {}
+            }
+
+            function Test-IsIgnoredTitle {
+                param([string]$title)
+                if (-not $title) { return $false }
+                $lower = $title.ToLowerInvariant()
+                foreach ($pattern in $ignoredTitlePatterns) {
+                    if ($pattern -and $lower.Contains($pattern)) {
+                        return $true
+                    }
+                }
+                return $false
+            }
+
+            function Test-IsOnDisplay {
+                param([IntPtr]$hwnd)
+                if (-not $hasDisplayFilter) { return $true }
+                try {
+                    $element = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+                    if ($element -eq $null) { return $false }
+                    $rect = $element.Current.BoundingRectangle
+                    if ([double]::IsInfinity($rect.X) -or [double]::IsNaN($rect.X)) { return $false }
+                    $centerX = $rect.X + ($rect.Width / 2)
+                    $centerY = $rect.Y + ($rect.Height / 2)
+                    return ($centerX -ge $displayX -and $centerX -lt ($displayX + $displayWidth) -and $centerY -ge $displayY -and $centerY -lt ($displayY + $displayHeight))
+                } catch {
+                    return $false
+                }
+            }
+
+            function Convert-Window {
+                param([IntPtr]$hwnd, [UInt32]$processId)
+                $element = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+                if ($element -eq $null) { return $null }
+
+                $rect = $element.Current.BoundingRectangle
+                $rectX = if ([double]::IsInfinity($rect.X) -or [double]::IsNaN($rect.X)) { 0 } else { $rect.X }
+                $rectY = if ([double]::IsInfinity($rect.Y) -or [double]::IsNaN($rect.Y)) { 0 } else { $rect.Y }
+                $rectWidth = if ([double]::IsInfinity($rect.Width) -or [double]::IsNaN($rect.Width)) { 0 } else { $rect.Width }
+                $rectHeight = if ([double]::IsInfinity($rect.Height) -or [double]::IsNaN($rect.Height)) { 0 } else { $rect.Height }
+
+                $props = @{
+                    Name = $element.Current.Name
+                    ClassName = $element.Current.ClassName
+                    ControlType = $element.Current.ControlType.ProgrammaticName
+                    AutomationId = $element.Current.AutomationId
+                    ProcessId = [int]$processId
+                    IsEnabled = $element.Current.IsEnabled
+                    IsOffscreen = $element.Current.IsOffscreen
+                    BoundingRect = @{
+                        X = $rectX
+                        Y = $rectY
+                        Width = $rectWidth
+                        Height = $rectHeight
+                    }
+                }
+
+                try {
+                    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+                    if ($process) {
+                        $props.ProcessName = $process.Name
+                        $props.ProcessPath = $process.Path
+                    }
+                } catch {}
+
+                return $props
+            }
+
+            function Test-IsCandidate {
+                param([IntPtr]$hwnd, [ref]$pidRef)
+                if ($hwnd -eq [IntPtr]::Zero) { return $false }
+                if (-not [User32]::IsWindow($hwnd)) { return $false }
+                if (-not [User32]::IsWindowVisible($hwnd)) { return $false }
+                if ([User32]::IsIconic($hwnd)) { return $false }
+
+                $exStyle = [User32]::GetWindowLongPtr($hwnd, [User32]::GWL_EXSTYLE)
+                if (($exStyle -band [User32]::WS_EX_TOOLWINDOW) -ne 0) { return $false }
+
+                $windowPid = 0
+                [User32]::GetWindowThreadProcessId($hwnd, [ref]$windowPid) | Out-Null
+                if (-not $windowPid) { return $false }
+                if ($ignoredProcessIds.Contains([int]$windowPid)) { return $false }
+
+                $titleBuilder = New-Object System.Text.StringBuilder 256
+                [User32]::GetWindowText($hwnd, $titleBuilder, 256) | Out-Null
+                $title = $titleBuilder.ToString()
+                if (Test-IsIgnoredTitle $title) { return $false }
+
+                $classBuilder = New-Object System.Text.StringBuilder 256
+                [User32]::GetClassName($hwnd, $classBuilder, 256) | Out-Null
+                $className = $classBuilder.ToString()
+                if ([string]::IsNullOrWhiteSpace($title) -and $className -ne 'ApplicationFrameWindow') { return $false }
+
+                if (-not (Test-IsOnDisplay $hwnd)) { return $false }
+
+                $pidRef.Value = [UInt32]$windowPid
+                return $true
+            }
+
+            $targetHwnd = [IntPtr]::Zero
+            $targetPid = [UInt32]0
+
+            $foregroundHwnd = [User32]::GetForegroundWindow()
+            if ($foregroundHwnd -ne [IntPtr]::Zero -and [User32]::IsWindow($foregroundHwnd)) {
+                $rootHwnd = [User32]::GetAncestor($foregroundHwnd, [User32]::GA_ROOT)
+                if ($rootHwnd -ne [IntPtr]::Zero) {
+                    $foregroundHwnd = $rootHwnd
+                }
+
+                $fgPid = [UInt32]0
+                if (Test-IsCandidate $foregroundHwnd ([ref]$fgPid)) {
+                    $targetHwnd = $foregroundHwnd
+                    $targetPid = $fgPid
+                }
+            }
+
+            if ($targetHwnd -eq [IntPtr]::Zero) {
+                [User32]::EnumWindows({
+                    param($hwnd, $lParam)
+                    $enumPid = [UInt32]0
+                    if (Test-IsCandidate $hwnd ([ref]$enumPid)) {
+                        $script:targetHwnd = $hwnd
+                        $script:targetPid = $enumPid
+                        return $false
+                    }
+                    return $true
+                }, [IntPtr]::Zero) | Out-Null
+            }
+
+            if ($targetHwnd -eq [IntPtr]::Zero) {
+                Write-Output "null"
+                exit 0
+            }
+
+            $window = Convert-Window $targetHwnd $targetPid
+            if ($window -eq $null) {
+                Write-Output "null"
+                exit 0
+            }
+
+            $window | ConvertTo-Json -Depth 4
+        }
+        catch {
+            Write-Error $_.Exception.Message
+            exit 1
+        }
+      `;
+
+      const powershell = spawn('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        psScript
+      ]);
+
+      let stdout = '';
+      let stderr = '';
+
+      powershell.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      powershell.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      powershell.on('close', (code) => {
+        if (code !== 0 || stderr) {
+          reject(new Error(`PowerShell error: ${stderr}`));
+          return;
+        }
+
+        try {
+          const trimmedOutput = stdout.trim();
+          if (trimmedOutput === 'null' || !trimmedOutput) {
+            resolve(null);
+          } else {
+            resolve(JSON.parse(trimmedOutput));
           }
         } catch (e) {
           reject(new Error(`Failed to parse result: ${e.message}`));

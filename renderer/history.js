@@ -6,11 +6,21 @@ export function addHistoryItem({
   answer,
   ttsEnabled,
   actionType,
+  actionExecutor,
   actionSummary,
   reasonerResponse,
   reasonerDurationMs,
+  treeLocatorElapsedMs,
+  treeResolveElapsedMs,
+  uiaElapsedMs,
+  uiaAttempted,
+  uiaSucceeded,
+  uiaFailureReason,
+  treeLocatorResponses,
+  executorElapsedMs,
   cuaElapsedMs,
-  cuaResponses
+  cuaResponses,
+  totalRunDurationMs
 }) {
   history.unshift({
     id: crypto.randomUUID(),
@@ -20,11 +30,21 @@ export function addHistoryItem({
     answer,
     ttsEnabled: ttsEnabled === true,
     actionType,
+    actionExecutor,
     actionSummary,
     reasonerResponse,
     reasonerDurationMs,
+    treeLocatorElapsedMs: Number(treeLocatorElapsedMs) || 0,
+    treeResolveElapsedMs: Number(treeResolveElapsedMs) || 0,
+    uiaElapsedMs: Number(uiaElapsedMs) || 0,
+    uiaAttempted: uiaAttempted === true,
+    uiaSucceeded: uiaSucceeded === true,
+    uiaFailureReason: uiaFailureReason ? String(uiaFailureReason) : null,
+    treeLocatorResponses: Array.isArray(treeLocatorResponses) ? treeLocatorResponses : [],
+    executorElapsedMs: Number(executorElapsedMs) || 0,
     cuaElapsedMs: Number(cuaElapsedMs) || 0,
     cuaResponses: Array.isArray(cuaResponses) ? cuaResponses : [],
+    totalRunDurationMs: Number(totalRunDurationMs) || 0,
     timestamp: new Date()
   });
 
@@ -51,10 +71,21 @@ export function getHistorySnapshot() {
     answer: item.answer,
     ttsEnabled: item.ttsEnabled === true,
     actionType: item.actionType,
+    actionExecutor: item.actionExecutor,
     actionSummary: item.actionSummary,
     reasonerResponse: item.reasonerResponse,
     reasonerDurationMs: item.reasonerDurationMs,
+    treeLocatorElapsedMs: item.treeLocatorElapsedMs,
+    treeResolveElapsedMs: item.treeResolveElapsedMs,
+    uiaElapsedMs: item.uiaElapsedMs,
+    uiaAttempted: item.uiaAttempted,
+    uiaSucceeded: item.uiaSucceeded,
+    uiaFailureReason: item.uiaFailureReason,
+    treeLocatorResponses: item.treeLocatorResponses,
+    executorElapsedMs: item.executorElapsedMs,
+    cuaElapsedMs: item.cuaElapsedMs,
     cuaResponses: item.cuaResponses,
+    totalRunDurationMs: item.totalRunDurationMs,
     index: history.length - index
   }));
 }

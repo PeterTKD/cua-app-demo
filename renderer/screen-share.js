@@ -3,6 +3,7 @@ import { elements } from './dom.js';
 let currentStream = null;
 let currentSource = null;
 let currentDisplayId = null;
+let currentDisplayInfo = null;
 
 export async function selectScreen() {
   const choice = await window.electronAPI.openScreenPicker();
@@ -47,6 +48,60 @@ export function getShareState() {
   };
 }
 
+function getExpectedCaptureSize() {
+  const physicalSize = currentDisplayInfo?.physicalSize;
+  if (physicalSize?.width > 0 && physicalSize?.height > 0) {
+    return physicalSize;
+  }
+
+  const bounds = currentDisplayInfo?.bounds;
+  if (bounds?.width > 0 && bounds?.height > 0) {
+    return { width: bounds.width, height: bounds.height };
+  }
+
+  const size = currentDisplayInfo?.size;
+  if (size?.width > 0 && size?.height > 0) {
+    return size;
+  }
+
+  return null;
+}
+
+function getCaptureCrop(sourceWidth, sourceHeight) {
+  const expectedSize = getExpectedCaptureSize();
+  if (!expectedSize) {
+    return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+  }
+
+  const sourceAspect = sourceWidth / sourceHeight;
+  const targetAspect = expectedSize.width / expectedSize.height;
+  if (!Number.isFinite(sourceAspect) || !Number.isFinite(targetAspect) || targetAspect <= 0) {
+    return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+  }
+
+  if (Math.abs(sourceAspect - targetAspect) < 0.01) {
+    return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+  }
+
+  if (sourceAspect > targetAspect) {
+    const cropWidth = Math.max(1, Math.round(sourceHeight * targetAspect));
+    return {
+      x: Math.max(0, Math.round((sourceWidth - cropWidth) / 2)),
+      y: 0,
+      width: cropWidth,
+      height: sourceHeight
+    };
+  }
+
+  const cropHeight = Math.max(1, Math.round(sourceWidth / targetAspect));
+  return {
+    x: 0,
+    y: Math.max(0, Math.round((sourceHeight - cropHeight) / 2)),
+    width: sourceWidth,
+    height: cropHeight
+  };
+}
+
 export function captureFrame() {
   if (!currentStream || !elements.video.videoWidth || !elements.video.videoHeight) {
     throw new Error('No active screen stream');
@@ -54,16 +109,27 @@ export function captureFrame() {
 
   const sourceWidth = elements.video.videoWidth;
   const sourceHeight = elements.video.videoHeight;
+  const crop = getCaptureCrop(sourceWidth, sourceHeight);
   const maxDimension = 1280;
-  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
-  const targetWidth = Math.max(1, Math.round(sourceWidth * scale));
-  const targetHeight = Math.max(1, Math.round(sourceHeight * scale));
+  const scale = Math.min(1, maxDimension / Math.max(crop.width, crop.height));
+  const targetWidth = Math.max(1, Math.round(crop.width * scale));
+  const targetHeight = Math.max(1, Math.round(crop.height * scale));
 
   const fullCanvas = document.createElement('canvas');
-  fullCanvas.width = sourceWidth;
-  fullCanvas.height = sourceHeight;
+  fullCanvas.width = crop.width;
+  fullCanvas.height = crop.height;
   const fullCtx = fullCanvas.getContext('2d');
-  fullCtx.drawImage(elements.video, 0, 0, sourceWidth, sourceHeight);
+  fullCtx.drawImage(
+    elements.video,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    crop.width,
+    crop.height
+  );
 
   const scaledCanvas = document.createElement('canvas');
   scaledCanvas.width = targetWidth;
@@ -72,10 +138,10 @@ export function captureFrame() {
   scaledCtx.drawImage(fullCanvas, 0, 0, targetWidth, targetHeight);
 
   return {
-    dataUrl: fullCanvas.toDataURL('image/png'),
+    dataUrl: fullCanvas.toDataURL('image/webp'),
     width: fullCanvas.width,
     height: fullCanvas.height,
-    reasonerDataUrl: scaledCanvas.toDataURL('image/jpeg', 0.7),
+    reasonerDataUrl: scaledCanvas.toDataURL('image/webp', 0.7),
     reasonerWidth: scaledCanvas.width,
     reasonerHeight: scaledCanvas.height
   };
@@ -88,41 +154,10 @@ async function startShare({ sourceId, displayId, name }) {
     chromeMediaSourceId: sourceId
   };
 
-  const requestStream = async (size) => {
-    const mandatory = { ...baseMandatory };
-    if (size && size.width && size.height) {
-      mandatory.minWidth = size.width;
-      mandatory.minHeight = size.height;
-      mandatory.maxWidth = size.width;
-      mandatory.maxHeight = size.height;
-    }
-    return navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { mandatory }
-    });
-  };
-
-  let stream;
-  const physicalSize = displayInfo?.physicalSize;
-  const dipSize = displayInfo?.size;
-
-  try {
-    stream = await requestStream(physicalSize);
-    const settings = stream.getVideoTracks()[0]?.getSettings?.() || {};
-    if (physicalSize && settings.width && settings.height) {
-      const widthRatio = settings.width / physicalSize.width;
-      const heightRatio = settings.height / physicalSize.height;
-      if (widthRatio < 0.9 || heightRatio < 0.9) {
-        stream.getTracks().forEach((track) => track.stop());
-        stream = await requestStream(dipSize);
-      }
-    }
-  } catch (error) {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    stream = await requestStream(dipSize);
-  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: { mandatory: baseMandatory }
+  });
 
   if (currentStream) {
     currentStream.getTracks().forEach((track) => track.stop());
@@ -131,6 +166,7 @@ async function startShare({ sourceId, displayId, name }) {
   currentStream = stream;
   currentSource = { sourceId, name };
   currentDisplayId = displayId;
+  currentDisplayInfo = displayInfo || null;
 
   elements.video.srcObject = stream;
 
@@ -149,6 +185,7 @@ export async function stopShare() {
 
   currentSource = null;
   currentDisplayId = null;
+  currentDisplayInfo = null;
 
   elements.video.srcObject = null;
 

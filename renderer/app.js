@@ -433,8 +433,11 @@ async function handleSelectScreen() {
     await ensureVideoReady();
     await waitForDisplayBounds();
     setStatus('Screen sharing active.', 'success');
-    if (appState.appMode === APP_MODES.GUIDE) {
-      await startGuideKickoff(true);
+    const typedQuestion = elements.questionInput?.value?.trim() || '';
+    if (appState.appMode === APP_MODES.GUIDE && typedQuestion) {
+      await handleAsk({ mode: APP_MODES.GUIDE });
+    } else if (!typedQuestion) {
+      setStatus('Screen sharing active. Ask a question to begin.', 'default');
     }
   } catch (error) {
     setStatus(error.message || 'Failed to share screen.', 'error');

@@ -76,6 +76,10 @@ function renderHistory(items) {
   const formatMs = (value) => (Number.isFinite(value) ? `${Math.round(value)} ms` : 'n/a');
   const formatTokens = (value) => (Number.isFinite(value) ? String(Math.round(value)) : 'n/a');
   const formatMoney = (value) => (Number.isFinite(value) ? `$${value.toFixed(6)}` : 'n/a');
+  const formatFailureReason = (value) => {
+    if (!value) return 'n/a';
+    return String(value).replace(/_/g, ' ');
+  };
 
   const estimateTokensFromText = (text) => {
     const cleaned = String(text || '')
@@ -147,6 +151,38 @@ function renderHistory(items) {
     return wrap;
   };
 
+  const createRuntimeTable = (rows) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'metrics-wrap';
+
+    const table = document.createElement('table');
+    table.className = 'metrics-table';
+
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Stage', 'Detail', 'Time'].forEach((label) => {
+      headRow.appendChild(createCell('th', label));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    rows.forEach((row) => {
+      const tr = document.createElement('tr');
+      if (row.isTotal) {
+        tr.className = 'totals-row';
+      }
+      tr.appendChild(createCell('td', row.stage));
+      tr.appendChild(createCell('td', row.detail));
+      tr.appendChild(createCell('td', formatMs(row.time)));
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
+  };
+
   items.forEach((item) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'item';
@@ -192,6 +228,20 @@ function renderHistory(items) {
       });
     }
 
+    let grokInput = 0;
+    let grokOutput = 0;
+    let grokTotal = 0;
+    if (Array.isArray(item.treeLocatorResponses)) {
+      item.treeLocatorResponses.forEach((entry) => {
+        const usage = extractUsageTotals(entry?.response);
+        if (usage) {
+          grokInput += usage.input;
+          grokOutput += usage.output;
+          grokTotal += usage.total;
+        }
+      });
+    }
+
     const ttsWasEnabled = item.ttsEnabled === true;
     const ttsInput = ttsWasEnabled ? estimateTokensFromText(item.answer) : 0;
     const ttsOutput = ttsWasEnabled ? ttsInput : 0;
@@ -201,12 +251,16 @@ function renderHistory(items) {
     const reasonerMeta = item.reasonerResponse?._meta;
     const reasonerPricing = reasonerMeta?.pricing || { input: 1.75, output: 14 };
     const reasonerLabel = reasonerMeta?.label || 'Reasoner';
+    const grokMeta = item.treeLocatorResponses?.find((entry) => entry?.response?._meta)?.response?._meta || null;
+    const grokPricing = grokMeta?.pricing || { input: 0.2, output: 0.5 };
+    const grokLabel = grokMeta?.label || 'Grok Tree Locator';
     const cuaLabel = 'CUA';
     const cuaPricing = { input: 3, output: 12 };
     const ttsPricing = { input: 0.6, output: 12 };
     const ttsLabel = 'GPT-4o-mini-tts';
 
     const reasonerCost = computeCost({ input: reasonerUsage.input, output: reasonerUsage.output }, reasonerPricing);
+    const grokCost = computeCost({ input: grokInput, output: grokOutput }, grokPricing);
     const cuaCost = computeCost({ input: cuaInput, output: cuaOutput }, cuaPricing);
     const ttsCost = ttsWasEnabled
       ? computeCost({ input: ttsInput, output: ttsOutput }, ttsPricing)
@@ -219,6 +273,13 @@ function renderHistory(items) {
         output: reasonerUsage.output,
         total: reasonerUsage.total,
         cost: reasonerCost
+      },
+      {
+        model: grokLabel,
+        input: grokInput,
+        output: grokOutput,
+        total: grokTotal,
+        cost: grokCost
       },
       {
         model: cuaLabel,
@@ -240,28 +301,70 @@ function renderHistory(items) {
 
     const metrics = {
       models,
-      totalInput: reasonerUsage.input + cuaInput + ttsInput,
-      totalOutput: reasonerUsage.output + cuaOutput + ttsOutput,
-      totalTokens: reasonerUsage.total + cuaTotal + ttsTotal,
-      totalCost: reasonerCost + cuaCost + ttsCost
+      totalInput: reasonerUsage.input + grokInput + cuaInput + ttsInput,
+      totalOutput: reasonerUsage.output + grokOutput + cuaOutput + ttsOutput,
+      totalTokens: reasonerUsage.total + grokTotal + cuaTotal + ttsTotal,
+      totalCost: reasonerCost + grokCost + cuaCost + ttsCost
     };
 
-    const totalRuntimeMs = (Number(item.reasonerDurationMs) || 0) + (Number(item.cuaElapsedMs) || 0);
+    const totalRuntimeMs = Number(item.totalRunDurationMs)
+      || ((Number(item.reasonerDurationMs) || 0) + (Number(item.executorElapsedMs) || 0));
 
+    const executorLabel = item.actionExecutor ? String(item.actionExecutor).toUpperCase() : 'NONE';
+    const uiaStatus = item.uiaAttempted
+      ? (item.uiaSucceeded ? 'UIA succeeded' : `UIA failed (${formatFailureReason(item.uiaFailureReason)})`)
+      : 'UIA not attempted';
     const summary = document.createElement('div');
     summary.className = 'summary';
-    summary.textContent = `Reasoner: ${formatMs(item.reasonerDurationMs)} | CUA calls: ${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} | Run time: ${formatMs(totalRuntimeMs)} | Run cost: ${formatMoney(metrics.totalCost)}`;
+    summary.textContent = `Reasoner: ${formatMs(item.reasonerDurationMs)} | ${uiaStatus} | Tree: ${formatMs(item.treeResolveElapsedMs)} | UIA: ${formatMs(item.uiaElapsedMs)} | Executor: ${executorLabel} | Executor time: ${formatMs(item.executorElapsedMs)} | Total: ${formatMs(totalRuntimeMs)} | Cost: ${formatMoney(metrics.totalCost)}`;
     wrapper.appendChild(summary);
 
     wrapper.appendChild(createMetricsTable(metrics));
+    wrapper.appendChild(createRuntimeTable([
+      { stage: 'Reasoner', detail: reasonerLabel, time: item.reasonerDurationMs },
+      {
+        stage: 'Tree Resolve',
+        detail: item.uiaAttempted ? `UI tree acquisition${item.uiaFailureReason ? `, ${formatFailureReason(item.uiaFailureReason)}` : ''}` : 'Not attempted',
+        time: item.treeResolveElapsedMs
+      },
+      { stage: 'Grok Locator', detail: `${Array.isArray(item.treeLocatorResponses) ? item.treeLocatorResponses.length : 0} call(s)`, time: item.treeLocatorElapsedMs },
+      {
+        stage: 'UIA Attempt',
+        detail: item.uiaAttempted
+          ? (item.uiaSucceeded ? 'Matched element and highlighted it' : `Fell back to CUA, ${formatFailureReason(item.uiaFailureReason)}`)
+          : 'Not attempted',
+        time: item.uiaElapsedMs
+      },
+      { stage: 'CUA Model', detail: `${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} call(s)`, time: item.cuaElapsedMs },
+      { stage: 'Executor', detail: executorLabel, time: item.executorElapsedMs },
+      { stage: 'Run Total', detail: 'End-to-end', time: totalRuntimeMs, isTotal: true }
+    ]));
 
     const pre = document.createElement('pre');
     const payload = {
       question: item.question || null,
       answer: item.answer || null,
       action: item.actionType || null,
+      executor: item.actionExecutor || null,
       actionSummary: item.actionSummary || null,
+      uia: {
+        attempted: item.uiaAttempted === true,
+        succeeded: item.uiaSucceeded === true,
+        failureReason: item.uiaFailureReason || null,
+        treeResolveMs: item.treeResolveElapsedMs || 0,
+        totalAttemptMs: item.uiaElapsedMs || 0
+      },
+      timings: {
+        reasonerMs: item.reasonerDurationMs || 0,
+        treeResolveMs: item.treeResolveElapsedMs || 0,
+        grokMs: item.treeLocatorElapsedMs || 0,
+        uiaMs: item.uiaElapsedMs || 0,
+        cuaMs: item.cuaElapsedMs || 0,
+        executorMs: item.executorElapsedMs || 0,
+        totalMs: totalRuntimeMs || 0
+      },
       reasoner: item.reasonerResponse || null,
+      grok: item.treeLocatorResponses || [],
       cua: item.cuaResponses || []
     };
     pre.textContent = JSON.stringify(payload, null, 2);

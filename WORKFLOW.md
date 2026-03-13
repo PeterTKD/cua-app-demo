@@ -1,76 +1,326 @@
-# How It Works
+# Workflow: End-to-End System Behavior
 
-This app combines an Electron screen-share widget with OpenAI Computer Use (CUA), a reasoner model, and Windows UI Automation (UIA) to guide users through on‑screen steps via callouts and highlights.
+## 1) What This App Is
+This is an Electron desktop assistant that watches a user-selected screen, plans next UI guidance steps with a reasoning model, validates those steps with a Computer Use model, and guides the user with visual callouts/highlights. It also monitors OS-level input to detect when the step was completed.
 
-## High-Level Flow
+Core pattern:
+1. Capture screen context.
+2. Plan the next action(s).
+3. Show guidance on-screen.
+4. Observe user input.
+5. Verify completion and continue.
 
-1. User selects a display in the screen picker.
-2. The renderer starts a screen share and draws a border overlay on the chosen display.
-3. The user asks a question in the widget.
-4. The renderer captures a frame and sends it (plus the question) to CUA.
-5. CUA returns an action (click, type, drag, scroll, pinpoint, etc.) with image coordinates.
-6. The renderer maps image coords to screen coords and requests UIA data at that point.
-7. UIA returns the element bounds; the main process renders a highlight window and a callout.
-8. OS‑level mouse/keyboard events are captured to verify the action is completed.
-9. The next action (if any) is queued, or the task is marked done.
+The system is agentic but human-in-the-loop: the app proposes/points, the user performs the action.
 
-## Components And Responsibilities
+---
 
-- `main.js`
-  - Owns all Electron windows: main widget, overlay, callout, highlight, history, screen picker.
-  - Provides IPC handlers for screen capture, overlay controls, UIA detection, and model calls.
-  - Tracks display scale/bounds and translates physical/DIP coordinates for overlays.
-  - Captures OS‑level input via `uiohook-napi` and forwards events to the renderer.
-  - Supports toggling overlay clickability and generates composite screenshots when needed.
-- `preload.js`
-  - Exposes a safe `window.electronAPI` surface for the renderer to call IPC methods.
-- `renderer/app.js`
-  - Main UI controller: chat log, status, buttons, history, and step completion UX.
-  - Dispatches model requests and drives the task state machine.
-- `renderer/screen-share.js`
-  - Opens the screen picker, starts the desktop stream, and stops it when finished.
-  - Captures frames for CUA (full PNG) and the reasoner (scaled JPEG).
-- `renderer/cua.js`
-  - Builds CUA prompts, parses actions, and decides when to show callouts/highlights.
-  - Queues multi‑step actions and tracks pending/complete state.
-  - Coordinates with UIA and overlay to visualize guidance.
-- `renderer/utils.js`
-  - Extracts CUA action data and maps image coordinates to display coordinates.
-- `renderer/history.js`
-  - Stores and renders response history for the history window.
-- `cua-client.js`
-  - Calls the OpenAI Responses API with the `computer_use_preview` tool and prompt text.
-  - Uses `CUA_API_KEY` or `OPENAI_API_KEY`.
-- `reasoner-client.js`
-  - Calls the OpenAI Responses API for higher‑level reasoning over the same screen frame.
-  - Uses `REASONER_API_KEY` or `OPENAI_API_KEY` and includes conversation history.
-- `ui-automation.js`
-  - Uses PowerShell UI Automation APIs to find the element at a screen point and return bounds.
+## 2) Architecture Overview
 
-## Windows And Overlays
+### Main Process (`main.js`)
+Responsibilities:
+- Owns all windows:
+  - Main widget window (`index.html`)
+  - Full-screen transparent overlay (`overlay.html`)
+  - Floating callout window (`callout-window.html`)
+  - Highlight border window (dynamic `data:` HTML)
+  - History window (`history-window.html`)
+  - Screen picker modal (`screen-picker.html`)
+- Exposes IPC handlers for:
+  - screen source discovery and display metadata
+  - overlay/callout/highlight control
+  - CUA + reasoner API requests
+  - TTS + STT API requests
+  - UI Automation element detection
+  - widget resizing and app lifecycle actions
+- Starts OS-level global input listeners via `uiohook-napi` and forwards events to renderer.
 
-- **Main widget**: The chat UI where the user asks questions and sees guidance text.
-- **Overlay**: Transparent window covering the shared display to draw guidance and accept clicks.
-- **Callout**: Always‑on‑top window with step instructions and status.
-- **Highlight**: Transparent border window drawn around the detected UI element.
-- **History**: Shows the raw JSON output from CUA.
-- **Screen picker**: Modal window to select which display to share.
+### Preload Bridge (`preload.js`)
+- Exposes safe `window.electronAPI` methods/events to renderer.
+- Renderer does not directly use Node APIs.
 
-## Coordinate Mapping
+### Renderer Orchestration
+- `renderer/app.js`: main controller/state transitions/button and mode logic.
+- `renderer/cua.js`: planning/execution loop integration and action presentation.
+- `renderer/screen-share.js`: display selection, capture stream, frame extraction.
+- `renderer/input.js`: OS input matching against active action criteria.
+- `renderer/history.js`: in-memory session history model.
 
-CUA returns coordinates in the image space used in the request. The renderer converts them to absolute screen coordinates using the selected display’s bounds and scale factor:
+### External Service Clients
+- `cua-client.js`: OpenAI Responses API with `computer_use_preview` tool.
+- `reasoner-client.js`: OpenAI/Anthropic reasoning endpoint abstraction.
+- `tts-client.js`: speech synthesis endpoint.
+- `stt-api.js`: speech transcription endpoint.
 
-absX = display.x + (x / imageWidth) * display.width  
-absY = display.y + (y / imageHeight) * display.height
+### Local Automation Engine
+- `ui-automation.js`: PowerShell + Windows UI Automation (UIA) lookup at screen points.
 
-These mapped points are used for UIA detection and highlight placement.
+---
 
-## Completion Checks
+## 3) Startup And Initialization Flow
+1. App starts (`app.whenReady`).
+2. Main widget window is created as frameless, transparent, always-on-top.
+3. Permission handler allows media/microphone requests.
+4. Renderer loads and initializes:
+   - binds event handlers
+   - enters GUIDE mode by default
+   - clears chat UI
+   - sets initial status
+5. Main process starts OS input capture (`uIOhook.start`) after widget load.
+6. Global shortcut is registered: `Ctrl/Cmd + Alt + D` to toggle overlay clickability mode.
 
-The app listens to OS‑level mouse/keyboard events to confirm that the requested action actually occurred. When it detects a matching interaction near the target, it advances to the next step.
+Crash handling:
+- If renderer crashes (`render-process-gone`), main logs and reloads renderer.
 
-## Prompts And Models
+---
 
-- Prompt files are loaded from `prompts/` (versioned with `prompts/current.txt`).
-- CUA uses `computer-use-preview` with a screenshot of the shared display.
-- The reasoner model can use a scaled screenshot plus conversation history to refine guidance.
+## 4) Screen Selection And Sharing Workflow
+1. User clicks screen select in widget.
+2. Renderer requests `open-screen-picker`.
+3. Main opens modal picker and returns selected desktop source (`sourceId`, `displayId`).
+4. Renderer starts `getUserMedia` desktop capture for that source.
+   - Tries physical resolution first, falls back to DIP size if needed.
+5. Renderer stores stream in hidden `<video>`.
+6. Renderer asks main to `show-border-overlay(displayId)`.
+7. Main stores current display metadata:
+   - display bounds (DIP)
+   - scale factor
+   - computed physical bounds
+
+Result: app now has live screen pixels and coordinate mapping context.
+
+---
+
+## 5) Ask/Plan/Guide Loop (Primary Agentic Loop)
+
+### Step A: User Ask Trigger
+Trigger sources:
+- Ask button
+- Enter key
+- Auto-followup timer
+- Next button
+- Overlay Next event
+
+`handleAsk()` in `renderer/app.js` does:
+1. Resolve question text (new or last question for guided continuation).
+2. Resolve mode (`guide/chat/diff_method/point`).
+3. Ensure screen share exists; if not, invoke picker.
+4. Set running flags; stop any active TTS/voice capture conflicts.
+5. Call `runCuaQuestion(question, options)` in `renderer/cua.js`.
+
+### Step B: Frame Capture
+`renderer/cua.js`:
+1. Ensures widget visible and clears old callout/highlight.
+2. Waits for fresh video frame callback.
+3. Captures frame from shared video.
+4. Produces:
+   - Full PNG data URL (`dataUrl`) for CUA-level operations/history.
+   - Scaled JPEG (`reasonerDataUrl`) for reasoner.
+
+### Step C: Reasoner Planning
+`runReasonerQuestion` receives:
+- `context.user_message`
+- `context.conversation_history` (in-memory, full session)
+- `context.last_cua_suggestion`
+- mode/user status flags
+- screenshot image
+
+Reasoner returns JSON expected to include:
+- `answer` (assistant text)
+- `cua_calls` (planned low-level action calls)
+- optional `callout` metadata
+
+### Step D: CUA Action Resolution
+If no actions or task completed marker:
+- app shows callout-only guidance or clears pending action.
+
+If actions exist:
+1. For each call, app runs CUA instruction (`runCuaInstruction`) with:
+   - action target description
+   - same frame image
+   - display size
+2. CUA returns concrete action payload (click/double_click/drag/scroll/type/etc + coords/keys).
+3. App checks expected-vs-actual action discrepancy.
+4. On discrepancy, retries once with immediate recapture path.
+
+### Step E: Presenting Action To User
+`presentCuaAction()`:
+1. Converts CUA image coords to display absolute physical coordinates.
+2. Converts physical coords to DIP/local overlay coords for UI placement.
+3. Shows callout window near target point.
+4. Requests UIA element detection at target point (parallelized).
+5. If UIA returns bounds, main draws highlight window around that element.
+6. Stores `currentAction`, `currentTargetRect`, `pendingAction`.
+
+### Step F: Completion Detection
+`renderer/input.js` listens to OS events forwarded from main:
+- click/double click
+- mouse down/up/move
+- wheel
+- keydown
+
+For each active action type, it checks criteria:
+- click/double click near target within tolerance
+- drag start and end within target points
+- wheel for scroll
+- key combo match for keypress
+- pinpoint proximity on move
+
+For click/double-click, app can run pixel-diff confirmation:
+- captures pre-action sample
+- waits settle delay
+- captures post-action sample
+- computes changed percentage excluding center cursor zone
+- only completes if diff >= threshold
+
+### Step G: Continue Or Finish
+On criteria met:
+1. callout/highlight cleared
+2. queued action shown (if multiple planned)
+3. otherwise assistant marks completion note and triggers follow-up ask automatically
+
+On criteria not met:
+- pending action reset, guidance faded, reasoner gets user_status feedback and replans.
+
+Task completion:
+- on `callout-complete`, app resets CUA/session state, clears history/chat UI and returns to ready state.
+
+---
+
+## 6) Voice Flow (Optional)
+
+### Capture
+- Renderer starts microphone capture via `audio-start-capture` (main process `naudiodon`).
+- Audio chunks buffered in memory.
+
+### Interim
+- Renderer periodically asks for `audio-interim` (last ~4s WAV base64) and sends to STT for interim text preview.
+
+### Final
+- Renderer calls `audio-stop-capture`, receives WAV base64.
+- Sends WAV to STT endpoint, gets transcript.
+- Merges transcript into question input.
+
+### TTS
+- Assistant text can be synthesized via TTS endpoint.
+- Text is cleaned (markdown/code markers removed), truncated to 4096 chars, returned as MP3 base64, and played in renderer.
+
+---
+
+## 7) Windows, Coordinates, And Overlays
+
+### Coordinate Domains
+- Image coordinates: model output space (captured frame dimensions).
+- Physical screen coordinates: actual pixel coordinates used by UIA and OS events.
+- DIP coordinates: Electron window positioning/rendering space.
+
+### Conversion usage
+- CUA point -> display absolute point -> overlay/callout local point.
+- UIA highlight rect physical -> DIP for highlight BrowserWindow placement.
+
+### Overlay click-through behavior
+- Default guidance mode is click-through.
+- Toggle shortcut can switch overlay interactivity.
+
+---
+
+## 8) Data Inventory: What The App Gets, Generates, Sends, Stores
+
+## 8.1 Inputs Collected Locally
+From user/system:
+- User typed question text.
+- Voice audio (if mic used) as PCM chunks in memory.
+- Desktop video stream pixels from selected screen.
+- OS-level global input telemetry events:
+  - mouse coordinates/button actions
+  - wheel rotation
+  - key down events + modifiers
+- Selected display metadata:
+  - display id
+  - bounds
+  - scale factors
+
+From UI Automation:
+- UI element metadata at target point:
+  - Name, ClassName, ControlType, AutomationId
+  - ProcessId, ProcessName, ProcessPath (if available)
+  - IsEnabled, IsOffscreen
+  - Bounding rectangle
+  - optional parent metadata
+
+## 8.2 Derived/Generated Data In App
+- Full PNG screenshot data URL per ask cycle.
+- Scaled JPEG screenshot data URL for reasoner.
+- Action plans from reasoner (`cua_calls`, callout metadata).
+- Resolved concrete actions from CUA.
+- Mapped absolute/dip target coordinates.
+- Pixel-diff percentages for completion verification.
+- Session conversation history (in-memory array).
+- Session history items (question, screenshot, answer, action metadata, model timings).
+
+## 8.3 Data Sent To External APIs
+Reasoner request sends:
+- screenshot image (`imageDataUrl`)
+- user message
+- entire in-session conversation history text
+- mode/status context
+
+CUA request sends:
+- action instruction text
+- screenshot image (`imageDataUrl`)
+- display dimensions
+- tool config (`computer_use_preview`, environment)
+
+STT request sends (when used):
+- WAV audio blob
+- model + language
+
+TTS request sends (when used):
+- cleaned assistant text
+- model + voice
+
+Endpoints configurable via env; defaults include:
+- `https://api.openai.com/v1/responses`
+- `https://api.openai.com/v1/audio/transcriptions`
+- `https://api.openai.com/v1/audio/speech`
+- or Anthropic messages endpoint for selected reasoner model.
+
+## 8.4 Local Storage And Retention
+- History and conversation state are in-memory only during runtime.
+- No built-in persistent database for session logs.
+- API keys can be loaded from environment variables and/or `api-keys.json`.
+- Prompt text is read from local `prompts/` files.
+- UIA tree helper may write temporary JSON files in `%TEMP%` during deep tree fetch, then attempts cleanup.
+
+Practical implication:
+- Sensitive screen/audio content is transient in process memory unless added external logging is introduced.
+
+---
+
+## 9) Security/Privacy-Relevant Notes
+- App can observe full selected screen contents.
+- App can capture global keyboard/mouse events while running.
+- App transmits captured screen/audio/user prompts to configured AI services.
+- API keys may be present in local file if not env-based.
+- Session history currently has no hard cap (unlimited in-memory growth).
+
+---
+
+## 10) Failure Handling And Recovery
+- Renderer crash: auto reload from main process.
+- Missing screen stream: ask path prompts screen selection.
+- Missing API key: specific throw from service clients.
+- CUA discrepancy: one automatic retry.
+- On app close: overlay/callout windows are destroyed and OS hook stops.
+
+---
+
+## 11) Practical Summary
+This app is a guided desktop automation assistant with a closed loop:
+1. perceive screen
+2. reason and plan
+3. propose concrete UI action
+4. visualize target with callout/highlight
+5. verify user action from OS telemetry + optional pixel diff
+6. continue until task completion
+
+It is not just static workflow scripting; it is an adaptive, stateful, human-in-the-loop agentic system.

@@ -105,6 +105,15 @@ export function withinTolerance(x, y, targetX, targetY) {
   return Math.hypot(dx, dy) <= POSITION_TOLERANCE;
 }
 
+function isWithinTargetRect(x, y, rect) {
+  if (!rect) return false;
+  const left = rect.x - POSITION_TOLERANCE;
+  const top = rect.y - POSITION_TOLERANCE;
+  const right = rect.x + rect.width + POSITION_TOLERANCE;
+  const bottom = rect.y + rect.height + POSITION_TOLERANCE;
+  return x >= left && x <= right && y >= top && y <= bottom;
+}
+
 export function bindOSInputHandlers({ completeStep, setStatus }) {
   window.electronAPI.onOSClick((event, data) => {
     const action = getCurrentAction();
@@ -117,17 +126,23 @@ export function bindOSInputHandlers({ completeStep, setStatus }) {
     }
 
     if (action.type === 'click') {
-      if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
+      const matched = action.source === 'uia'
+        ? isWithinTargetRect(data.absoluteX, data.absoluteY, action.targetRect)
+        : withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y);
+      if (matched) {
         completeStep('Click complete.');
       } else {
-        setStatus('Not quite there. Try clicking the pointer.', 'default');
+        setStatus(action.source === 'uia' ? 'Click inside the highlighted element.' : 'Not quite there. Try clicking the pointer.', 'default');
       }
       return;
     }
 
     if (action.type === 'double_click') {
-      if (!withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
-        setStatus('Double click near the pointer.', 'default');
+      const matched = action.source === 'uia'
+        ? isWithinTargetRect(data.absoluteX, data.absoluteY, action.targetRect)
+        : withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y);
+      if (!matched) {
+        setStatus(action.source === 'uia' ? 'Double click inside the highlighted element.' : 'Double click near the pointer.', 'default');
         return;
       }
       const now = Date.now();
@@ -170,7 +185,10 @@ export function bindOSInputHandlers({ completeStep, setStatus }) {
       return;
     }
     if (action.type === 'pinpoint') {
-      if (withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y)) {
+      const matched = action.source === 'uia'
+        ? isWithinTargetRect(data.absoluteX, data.absoluteY, action.targetRect)
+        : withinTolerance(data.absoluteX, data.absoluteY, action.x, action.y);
+      if (matched) {
         completeStep('Pinpoint acknowledged.');
       }
       return;

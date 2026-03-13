@@ -3,11 +3,21 @@ const path = require('path');
 const fs = require('fs');
 
 const { uIOhook } = require('uiohook-napi');
-const UIAutomationDetector = require('./ui-automation');
+let UIAutomationDetector;
+let uiAutomationBackend = 'edge';
+try {
+  UIAutomationDetector = require('./ui-automation-edge');
+} catch (error) {
+  uiAutomationBackend = 'powershell';
+  console.warn('Falling back to legacy UI Automation backend:', error.message);
+  UIAutomationDetector = require('./ui-automation');
+}
 const { runCuaQuestion } = require('./cua-client');
 const { runReasonerQuestion, getAvailableModels, getCurrentModel, setCurrentModel } = require('./reasoner-client');
+const { runTreeLocator } = require('./tree-locator-client');
 const { synthesizeSpeech } = require('./tts-client');
 const { transcribeAudio } = require('./stt-api');
+const { pruneUITree } = require('./tree-utils');
 
 let portAudio = null;
 try {
@@ -76,6 +86,42 @@ function safeSendToMain(channel, payload) {
   }
 }
 
+function promoteWidgetWindow(win, { visibleOnAllWorkspaces = true } = {}) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver');
+  } catch (_) {
+    win.setAlwaysOnTop(true);
+  }
+
+  if (visibleOnAllWorkspaces && typeof win.setVisibleOnAllWorkspaces === 'function') {
+    try {
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    } catch (_) {
+      // Best-effort only. Some platforms/window types may not support this.
+    }
+  }
+
+  if (typeof win.setFullScreenable === 'function') {
+    try {
+      win.setFullScreenable(false);
+    } catch (_) {
+      // Ignore unsupported window types.
+    }
+  }
+
+  if (typeof win.moveTop === 'function') {
+    try {
+      win.moveTop();
+    } catch (_) {
+      // Ignore if the platform does not expose z-order changes.
+    }
+  }
+}
+
 function getScaleFactorSafe(display) {
   return display?.scaleFactor || 1;
 }
@@ -101,16 +147,19 @@ function screenToDipPointSafe(point, scaleFactor = 1) {
 }
 
 function computePhysicalBoundsFromDip(dipBounds, scaleFactor = 1) {
+  if (screen && typeof screen.dipToScreenRect === 'function') {
+    const rect = screen.dipToScreenRect(null, dipBounds);
+    if (rect?.width > 0 && rect?.height > 0) {
+      return rect;
+    }
+  }
+
   const topLeft = dipToScreenPointSafe({ x: dipBounds.x, y: dipBounds.y }, scaleFactor);
-  const bottomRight = dipToScreenPointSafe(
-    { x: dipBounds.x + dipBounds.width, y: dipBounds.y + dipBounds.height },
-    scaleFactor
-  );
   return {
     x: topLeft.x,
     y: topLeft.y,
-    width: Math.max(1, bottomRight.x - topLeft.x),
-    height: Math.max(1, bottomRight.y - topLeft.y)
+    width: Math.max(1, Math.round(dipBounds.width * scaleFactor)),
+    height: Math.max(1, Math.round(dipBounds.height * scaleFactor))
   };
 }
 
@@ -162,7 +211,114 @@ function encodeWavBuffer(pcmBuffer, sampleRate) {
 // Initialize UI Automation detector
 const uiAutomation = new UIAutomationDetector();
 
-console.log('UI Automation detector initialized');
+console.log(`UI Automation detector initialized (${uiAutomationBackend})`);
+
+async function resolveActiveProcessIdForTree() {
+  const selectedBounds = currentDisplayPhysicalBounds || currentDisplayBounds;
+  if (!selectedBounds) {
+    return null;
+  }
+
+  try {
+    const foregroundWindow = await uiAutomation.getForegroundWindow(
+      selectedBounds,
+      process.pid
+    );
+    if (foregroundWindow?.ProcessId && foregroundWindow.ProcessId !== process.pid) {
+      return Number(foregroundWindow.ProcessId);
+    }
+  } catch (error) {
+    console.warn('Unable to read foreground window for tree locator:', error.message);
+  }
+
+  const isRectOnSelectedDisplay = (rect) => {
+    if (!rect) return false;
+    const x = Number(rect.X ?? rect.x ?? 0);
+    const y = Number(rect.Y ?? rect.y ?? 0);
+    const width = Number(rect.Width ?? rect.width ?? 0);
+    const height = Number(rect.Height ?? rect.height ?? 0);
+    return x + width > selectedBounds.x
+      && y + height > selectedBounds.y
+      && x < selectedBounds.x + selectedBounds.width
+      && y < selectedBounds.y + selectedBounds.height;
+  };
+
+  try {
+    const focused = await uiAutomation.getFocusedElement();
+    if (focused?.ProcessId && focused.ProcessId !== process.pid && isRectOnSelectedDisplay(focused.BoundingRect)) {
+      return Number(focused.ProcessId);
+    }
+  } catch (error) {
+    console.warn('Unable to read focused element for tree locator:', error.message);
+  }
+
+  try {
+    const cursorPoint = screen.getCursorScreenPoint();
+    const cursorOnSelectedDisplay = cursorPoint
+      && cursorPoint.x >= selectedBounds.x
+      && cursorPoint.y >= selectedBounds.y
+      && cursorPoint.x < selectedBounds.x + selectedBounds.width
+      && cursorPoint.y < selectedBounds.y + selectedBounds.height;
+    if (cursorOnSelectedDisplay) {
+      const elementAtCursor = await uiAutomation.getElementAtPoint(cursorPoint.x, cursorPoint.y);
+      if (elementAtCursor?.ProcessId && elementAtCursor.ProcessId !== process.pid) {
+        return Number(elementAtCursor.ProcessId);
+      }
+    }
+  } catch (error) {
+    console.warn('Unable to read cursor element for tree locator:', error.message);
+  }
+
+  return null;
+}
+
+function countPrunedTreeNodes(nodes) {
+  if (!Array.isArray(nodes)) {
+    return 0;
+  }
+  return nodes.reduce((total, node) => total + 1 + countPrunedTreeNodes(node?.h), 0);
+}
+
+async function loadPrunedTreeForProcess(processId) {
+  const numericProcessId = Number(processId);
+  if (!Number.isFinite(numericProcessId) || numericProcessId <= 0 || numericProcessId === process.pid) {
+    return null;
+  }
+
+  const rawTree = await uiAutomation.getWindowElements(
+    numericProcessId,
+    currentDisplayPhysicalBounds || currentDisplayBounds || null
+  );
+  console.log(`[TreeDebug] rawTree type=${Array.isArray(rawTree) ? 'array' : typeof rawTree}, length=${Array.isArray(rawTree) ? rawTree.length : 'N/A'}`);
+  const prunedTree = pruneUITree(rawTree);
+  const nodeCount = countPrunedTreeNodes(prunedTree);
+  console.log(`[TreeDebug] prunedTree length=${Array.isArray(prunedTree) ? prunedTree.length : 'N/A'}, nodeCount=${nodeCount}`);
+  if (!Array.isArray(prunedTree) || prunedTree.length === 0 || nodeCount === 0) {
+    return null;
+  }
+
+  return {
+    processId: numericProcessId,
+    processIds: [numericProcessId],
+    nodeCount,
+    tree: prunedTree
+  };
+}
+
+async function resolveTreeForSelectedDisplay() {
+  const preferredProcessId = await resolveActiveProcessIdForTree();
+  if (preferredProcessId) {
+    try {
+      const preferredTree = await loadPrunedTreeForProcess(preferredProcessId);
+      if (preferredTree) {
+        return { ...preferredTree, source: 'preferred-process' };
+      }
+    } catch (error) {
+      console.warn(`Unable to load preferred process tree for ${preferredProcessId}:`, error.message);
+    }
+  }
+  return null;
+}
 
 // Handle IPC request for desktop sources
 ipcMain.handle('get-desktop-sources', async () => {
@@ -305,6 +461,12 @@ ipcMain.handle('get-prompt-text', async (event, name) => {
 ipcMain.handle('show-border-overlay', async (event, displayId) => {
   const displays = screen.getAllDisplays();
   const targetDisplay = displays.find(d => d.id.toString() === displayId) || displays[0];
+  const overlayBounds = {
+    x: targetDisplay.bounds.x,
+    y: targetDisplay.bounds.y,
+    width: targetDisplay.bounds.width,
+    height: targetDisplay.bounds.height
+  };
   
   currentDisplayId = displayId; // Store current display ID
   currentDisplayBounds = targetDisplay.bounds; // Store display bounds for coordinate calculation
@@ -317,10 +479,7 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
   }
 
   overlayWindow = new BrowserWindow({
-    x: targetDisplay.bounds.x,
-    y: targetDisplay.bounds.y,
-    width: targetDisplay.bounds.width,
-    height: targetDisplay.bounds.height,
+    ...overlayBounds,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -328,6 +487,9 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
     resizable: false,
     movable: false,
     focusable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'overlay-preload.js'),
       nodeIntegration: false,
@@ -335,9 +497,29 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
     }
   });
 
+  promoteWidgetWindow(overlayWindow);
+  overlayWindow.setBounds(overlayBounds, false);
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
+  overlayWindow.once('ready-to-show', () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      return;
+    }
+    promoteWidgetWindow(overlayWindow);
+    overlayWindow.setBounds(overlayBounds, false);
+    overlayWindow.showInactive();
+  });
   overlayWindow.loadFile('overlay.html');
-  
+
+  // Exclude the transparent overlay from screen captures so it doesn't appear as a green rectangle
+  try {
+    const hwndBuffer = overlayWindow.getNativeWindowHandle();
+    const hwnd = Number(hwndBuffer.readBigInt64LE ? hwndBuffer.readBigInt64LE(0) : hwndBuffer.readInt32LE(0));
+    await uiAutomation.setWindowExcludeFromCapture(hwnd);
+    console.log('[Overlay] SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied, hwnd:', hwnd);
+  } catch (e) {
+    console.warn('[Overlay] Could not set WDA_EXCLUDEFROMCAPTURE:', e.message);
+  }
+
   return true;
 });
 
@@ -381,6 +563,7 @@ ipcMain.handle('show-callout', async (event, payload) => {
         contextIsolation: true
       }
     });
+    promoteWidgetWindow(calloutWindow);
     calloutWindow.loadFile('callout-window.html');
     calloutWindow.on('closed', () => {
       calloutWindow = null;
@@ -424,6 +607,7 @@ ipcMain.handle('show-callout', async (event, payload) => {
     const x = Math.max(baseX + 12, Math.min(maxX, baseX + targetX + 18));
     const y = Math.max(baseY + 12, Math.min(maxY, baseY + targetY + 18));
     calloutWindow.setPosition(Math.round(x), Math.round(y), false);
+    promoteWidgetWindow(calloutWindow);
     calloutWindow.show();
   } else if (calloutWindow && !calloutWindow.isDestroyed()) {
     calloutWindow.hide();
@@ -456,6 +640,7 @@ ipcMain.handle('set-widget-visible', async (event, isVisible) => {
     return false;
   }
   if (isVisible) {
+    promoteWidgetWindow(mainWindow);
     mainWindow.show();
   } else {
     mainWindow.hide();
@@ -653,9 +838,7 @@ function createWindow() {
       contextIsolation: true
     }
   });
-  mainWindow.setAlwaysOnTop(true, 'screen-saver');
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  mainWindow.setFullScreenable(false);
+  promoteWidgetWindow(mainWindow);
 
   // Enable screen sharing and microphone access
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -699,6 +882,12 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// Disable Windows.Graphics.Capture API so Chromium uses DXGI duplication instead.
+// This removes the green recording-indicator border Windows adds around the captured display.
+// Both WgcScreenCapturer (full display) and WgcWindowCapturer (individual windows) must be
+// disabled together, otherwise WGC is still used for screen-type sources in newer Chromium.
+app.commandLine.appendSwitch('disable-features', 'WgcScreenCapturer,WgcWindowCapturer');
 
 app.whenReady().then(() => {
   createWindow();
@@ -788,8 +977,54 @@ ipcMain.handle('ui-automation-detect-point', async (event, { x, y }) => {
 });
 
 // Computer Use (CUA) handler
+async function captureNativeScreenshot() {
+  const appWindows = [mainWindow, overlayWindow, calloutWindow, highlightWindow]
+    .filter(w => w && !w.isDestroyed());
+
+  try {
+    appWindows.forEach(w => w.setOpacity(0));
+    await new Promise(r => setTimeout(r, 30)); // one frame for DWM to recompose
+    const parsedDisplayId = currentDisplayId ? parseInt(currentDisplayId, 10) : NaN;
+    const displayId = Number.isFinite(parsedDisplayId) ? parsedDisplayId : undefined;
+
+    if (typeof screen.captureDisplay === 'function') {
+      try {
+        const image = await screen.captureDisplay(displayId);
+        if (image && !image.isEmpty()) {
+          const size = image.getSize();
+          return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+        }
+        console.warn('[Screenshot] screen.captureDisplay returned an empty image.');
+      } catch (error) {
+        console.warn('[Screenshot] screen.captureDisplay failed:', error.message);
+      }
+    }
+
+    const bounds = currentDisplayPhysicalBounds;
+    if (bounds?.width > 0 && bounds?.height > 0 && typeof uiAutomation.captureScreenNative === 'function') {
+      const base64 = await uiAutomation.captureScreenNative(bounds.x, bounds.y, bounds.width, bounds.height, 90);
+      if (base64) {
+        return {
+          dataUrl: `data:image/jpeg;base64,${base64}`,
+          width: bounds.width,
+          height: bounds.height
+        };
+      }
+    }
+
+    return null;
+  } catch (e) {
+    console.warn('[Screenshot] Capture failed:', e.message);
+    return null;
+  } finally {
+    appWindows.forEach(w => w.setOpacity(1));
+  }
+}
+
 ipcMain.handle('cua-run', async (event, payload) => {
   try {
+    const native = await captureNativeScreenshot();
+    if (native) payload = { ...payload, imageDataUrl: native.dataUrl, displayWidth: native.width, displayHeight: native.height };
     const response = await runCuaQuestion(payload);
     return response;
   } catch (error) {
@@ -800,10 +1035,97 @@ ipcMain.handle('cua-run', async (event, payload) => {
 
 ipcMain.handle('reasoner-run', async (event, payload) => {
   try {
+    const native = await captureNativeScreenshot();
+    if (native) payload = { ...payload, imageDataUrl: native.dataUrl };
     const response = await runReasonerQuestion(payload);
     return response;
   } catch (error) {
     console.error('Reasoner error:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('tree-locator-run', async (event, payload) => {
+  try {
+    const action = payload?.action || null;
+    if (!action?.uia_target) {
+      throw new Error('Tree locator requires action.uia_target');
+    }
+
+    const treeResolveStartedAt = Date.now();
+    const resolvedTree = await resolveTreeForSelectedDisplay();
+    const treeResolveDurationMs = Date.now() - treeResolveStartedAt;
+    if (!resolvedTree?.tree || !Array.isArray(resolvedTree.tree) || resolvedTree.tree.length === 0) {
+      console.warn('Tree locator disabled for this action: unable to resolve a non-empty UI tree from the selected screen. Falling back to CUA.');
+      return {
+        output_text: JSON.stringify({ notFound: true, confidence: 'low' }),
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0
+        },
+        _meta: {
+          modelId: null,
+          label: 'Grok Tree Locator',
+          pricing: { input: 0.2, output: 0.5 },
+          skipped: 'missing_ui_tree'
+        },
+        _tree: null,
+        _timings: {
+          treeResolveDurationMs,
+          treeNodeCount: 0
+        }
+      };
+    }
+
+    const response = await runTreeLocator({
+      description: action.target_description || action.action_callout || action.action_type || '',
+      uiaTarget: action.uia_target,
+      uiTree: resolvedTree.tree
+    });
+
+    return {
+      ...response,
+      _tree: {
+        source: resolvedTree.source,
+        processId: resolvedTree.processId,
+        processIds: resolvedTree.processIds,
+        nodeCount: resolvedTree.nodeCount
+      },
+      _timings: {
+        treeResolveDurationMs,
+        treeNodeCount: resolvedTree.nodeCount
+      }
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    if (
+      message.includes('Missing TREE_LOCATOR_API_KEY')
+      || message.includes('Missing GROK_API_KEY')
+      || message.includes('Missing XAI_API_KEY')
+    ) {
+      console.warn('Tree locator disabled: missing TREE_LOCATOR_API_KEY, GROK_API_KEY, or XAI_API_KEY. Falling back to CUA.');
+      return {
+        output_text: JSON.stringify({ notFound: true, confidence: 'low' }),
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0
+        },
+        _meta: {
+          modelId: null,
+          label: 'Grok Tree Locator',
+          pricing: { input: 0.2, output: 0.5 },
+          skipped: 'missing_api_key'
+        },
+        _tree: null,
+        _timings: {
+          treeResolveDurationMs: 0,
+          treeNodeCount: 0
+        }
+      };
+    }
+    console.error('Tree locator error:', error);
     throw error;
   }
 });
@@ -995,6 +1317,7 @@ ipcMain.handle('show-element-highlight', async (event, { x, y, width, height, co
       }
     });
 
+    promoteWidgetWindow(highlightWindow);
     highlightWindow.setIgnoreMouseEvents(true, { forward: true });
     
     // Load HTML with colored border

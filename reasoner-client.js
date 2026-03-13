@@ -3,19 +3,21 @@ const path = require('path');
 const { getApiKey, getProviderApiKey } = require('./api-keys');
 const { buildAnthropicPayload, normalizeAnthropicResult } = require('./anthropic-client');
 
-const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.1', 'reasoner.txt');
+const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.2', 'reasoner.txt');
 
 const MODELS = [
   // OpenAI Responses API
   { id: 'gpt-5.2',    label: 'GPT-5.2',         group: 'GPT',    provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',        apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.75, output: 14 } },
-  { id: 'o4-mini',    label: 'o4-mini',          group: 'GPT',    provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',        apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.1,  output: 4.4 } },
+  { id: 'gpt-5.4-2026-03-05', label: 'GPT-5.4', group: 'GPT',    provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',        apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 2.5,  output: 15 } },
+  { id: 'gpt-5.3-chat-latest', label: 'GPT-5.3 Chat', group: 'GPT', provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',     apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.75, output: 14 } },
+  { id: 'gpt-5.2-chat-latest', label: 'GPT-5.2 Chat', group: 'GPT', provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',     apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.75, output: 14 } },
   // Anthropic
   { id: 'claude-opus-4-6',         label: 'Claude Opus 4.6',    group: 'Claude', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1/messages', apiKeyVar: 'ANTHROPIC_API_KEY', pricing: { input: 15,   output: 75  } },
   { id: 'claude-sonnet-4-6',       label: 'Claude Sonnet 4.6',  group: 'Claude', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1/messages', apiKeyVar: 'ANTHROPIC_API_KEY', pricing: { input: 3,    output: 15  } },
   { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', group: 'Claude', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1/messages', apiKeyVar: 'ANTHROPIC_API_KEY', pricing: { input: 0.8,  output: 4   } }
 ];
 
-let currentModelId = process.env.REASONER_MODEL || 'gpt-5.2';
+let currentModelId = process.env.REASONER_MODEL || 'gpt-5.4-2026-03-05';
 
 function getAvailableModels() {
   return MODELS.map(m => ({ id: m.id, label: m.label, group: m.group, pricing: m.pricing }));
@@ -40,19 +42,6 @@ function loadReasonerPrompt() {
   return fs.readFileSync(REASONER_PROMPT_PATH, 'utf8');
 }
 
-function formatConversationHistory(history) {
-  if (!Array.isArray(history) || history.length === 0) {
-    return '';
-  }
-  return history
-    .map((item) => {
-      const role = item?.role ? String(item.role) : 'unknown';
-      const content = item?.content ? String(item.content) : '';
-      return `${role.toUpperCase()}: ${content}`;
-    })
-    .join('\n');
-}
-
 function resolveApiKey(config) {
   // First try the provider-specific key
   const providerKey = getProviderApiKey(config.apiKeyVar);
@@ -67,44 +56,127 @@ function resolveApiKey(config) {
   return null;
 }
 
-function buildFullSystemPrompt(context) {
-  const basePrompt = loadReasonerPrompt();
-  const historyText = formatConversationHistory(context?.conversation_history);
-  return historyText
-    ? `${basePrompt}\n\n=== Conversation History ===\n${historyText}\n`
-    : basePrompt;
+function buildFullSystemPrompt() {
+  return loadReasonerPrompt();
+}
+
+function buildReasonerUserText(context) {
+  const lines = [];
+  const userMessage = context?.user_message ? String(context.user_message) : '';
+  lines.push(`User message: ${userMessage || '(none)'}`);
+
+  if (context?.user_status) {
+    lines.push(`User Status: ${String(context.user_status)}`);
+  }
+  if (context?.last_cua_suggestion) {
+    lines.push(`Last action suggestion: ${String(context.last_cua_suggestion)}`);
+  }
+  if (context?.mode) {
+    lines.push(`Mode: ${String(context.mode)}`);
+  }
+  if (typeof context?.allow_parallel_pinpoint === 'boolean') {
+    lines.push(`allow_parallel_pinpoint: ${context.allow_parallel_pinpoint}`);
+  }
+
+  const screenWidth = Number(context?.screen_dimensions?.width);
+  const screenHeight = Number(context?.screen_dimensions?.height);
+  if (Number.isFinite(screenWidth) && Number.isFinite(screenHeight) && screenWidth > 0 && screenHeight > 0) {
+    lines.push(`Screen dimensions: ${Math.round(screenWidth)}x${Math.round(screenHeight)} pixels`);
+  }
+
+  const originalWidth = Number(context?.original_screen_dimensions?.width);
+  const originalHeight = Number(context?.original_screen_dimensions?.height);
+  if (Number.isFinite(originalWidth) && Number.isFinite(originalHeight) && originalWidth > 0 && originalHeight > 0) {
+    lines.push(`Original screen dimensions: ${Math.round(originalWidth)}x${Math.round(originalHeight)} pixels`);
+  }
+
+  return lines.join('\n');
+}
+
+function normalizeConversationRole(role) {
+  return String(role || '').toLowerCase() === 'assistant' ? 'assistant' : 'user';
+}
+
+function sanitizeConversationText(content) {
+  if (content == null) return '';
+  return String(content).trim();
+}
+
+function buildConversationMessages(context, userText) {
+  const history = Array.isArray(context?.conversation_history)
+    ? [...context.conversation_history]
+    : [];
+  const currentUserMessage = sanitizeConversationText(context?.user_message);
+
+  // The current user prompt is already pushed into conversationHistory upstream.
+  // Drop that trailing duplicate and re-add it as the final turn with the image.
+  if (currentUserMessage) {
+    const last = history[history.length - 1];
+    if (last && normalizeConversationRole(last.role) === 'user' && sanitizeConversationText(last.content) === currentUserMessage) {
+      history.pop();
+    }
+  }
+
+  const messages = history
+    .map((item) => {
+      const text = sanitizeConversationText(item?.content);
+      if (!text) return null;
+      return {
+        role: normalizeConversationRole(item?.role),
+        text
+      };
+    })
+    .filter(Boolean);
+
+  messages.push({
+    role: 'user',
+    text: userText || 'Give next step'
+  });
+
+  return messages;
 }
 
 // --- Payload builders ---
 
-function buildOpenAIResponsesPayload(config, fullSystemPrompt, userText, imageDataUrl) {
-  return {
+function buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl) {
+  const input = conversationMessages.map((message, index) => {
+    const content = [{
+      type: message.role === 'assistant' ? 'output_text' : 'input_text',
+      text: message.text
+    }];
+    if (index === conversationMessages.length - 1) {
+      content.push({ type: 'input_image', image_url: imageDataUrl });
+    }
+    return {
+      role: message.role,
+      content
+    };
+  });
+
+  const payload = {
     model: config.id,
     instructions: fullSystemPrompt,
-    input: [
-      {
-        role: 'user',
-        content: [
-          { type: 'input_text', text: userText },
-          { type: 'input_image', image_url: imageDataUrl }
-        ]
-      }
-    ],
-    reasoning: { effort: 'none' },
+    input,
     truncation: 'auto'
   };
+
+  if (config.id !== 'gpt-5.2-chat-latest' && config.id !== 'gpt-5.3-chat-latest') {
+    payload.reasoning = { effort: 'none' };
+  }
+
+  return payload;
 }
 
 
 
 // Anthropic payload + normalization live in anthropic-client.js (tool use / structured output)
 
-function buildPayload(config, fullSystemPrompt, userText, imageDataUrl) {
+function buildPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl) {
   switch (config.provider) {
     case 'openai-responses':
-      return buildOpenAIResponsesPayload(config, fullSystemPrompt, userText, imageDataUrl);
+      return buildOpenAIResponsesPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
     case 'anthropic':
-      return buildAnthropicPayload(config, fullSystemPrompt, userText, imageDataUrl);
+      return buildAnthropicPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }
@@ -188,9 +260,10 @@ async function runReasonerQuestion({ context, imageDataUrl }) {
     throw new Error(`Missing API key for ${config.label} (env var: ${config.apiKeyVar})`);
   }
 
-  const fullSystemPrompt = buildFullSystemPrompt(context);
-  const userText = context?.user_message ? String(context.user_message) : '';
-  const payload = buildPayload(config, fullSystemPrompt, userText, imageDataUrl);
+  const fullSystemPrompt = buildFullSystemPrompt();
+  const userText = buildReasonerUserText(context);
+  const conversationMessages = buildConversationMessages(context, userText);
+  const payload = buildPayload(config, fullSystemPrompt, conversationMessages, imageDataUrl);
   const headers = buildHeaders(config, apiKey);
 
   const response = await fetch(config.endpoint, {

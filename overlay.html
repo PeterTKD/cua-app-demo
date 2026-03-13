@@ -50,9 +50,34 @@
             transition: opacity 0.2s ease;
         }
 
+        .selection-ring {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            border: 6px solid rgba(251, 191, 36, 0.95);
+            box-shadow:
+                inset 0 0 0 1px rgba(255, 248, 220, 0.65),
+                0 0 24px rgba(245, 158, 11, 0.35),
+                0 0 64px rgba(245, 158, 11, 0.2);
+        }
+
+        body.selection-pulse:not(.loading) .selection-ring {
+            animation: selectionRing 1.6s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+        }
+
+        body.selection-pulse:not(.loading) .edge-glow {
+            opacity: 1;
+            animation: selectionPulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+        }
+
         body.loading .edge-glow {
             opacity: 1;
             animation: edgePulse 1.2s ease-in-out infinite;
+        }
+
+        body.selection-pulse .border {
+            animation: selectedBorderPulse 1.6s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
         }
 
         #textOverlay {
@@ -223,6 +248,82 @@
             }
         }
 
+        @keyframes selectionPulse {
+            0% {
+                opacity: 0;
+                box-shadow:
+                    inset 0 0 0 1px rgba(245, 158, 11, 0.2),
+                    inset 0 0 18px rgba(245, 158, 11, 0.18),
+                    inset 0 0 36px rgba(245, 158, 11, 0.12);
+            }
+            30% {
+                opacity: 1;
+                box-shadow:
+                    inset 0 0 0 3px rgba(245, 158, 11, 0.58),
+                    inset 0 0 42px rgba(245, 158, 11, 0.42),
+                    inset 0 0 96px rgba(245, 158, 11, 0.24);
+            }
+            100% {
+                opacity: 0;
+                box-shadow:
+                    inset 0 0 0 1px rgba(245, 158, 11, 0),
+                    inset 0 0 0 rgba(245, 158, 11, 0),
+                    inset 0 0 0 rgba(245, 158, 11, 0);
+            }
+        }
+
+        @keyframes selectionRing {
+            0% {
+                opacity: 0;
+                border-color: rgba(251, 191, 36, 0.25);
+                box-shadow:
+                    inset 0 0 0 1px rgba(255, 248, 220, 0.1),
+                    0 0 0 rgba(245, 158, 11, 0),
+                    0 0 0 rgba(245, 158, 11, 0);
+            }
+            20% {
+                opacity: 1;
+                border-color: rgba(251, 191, 36, 0.98);
+                box-shadow:
+                    inset 0 0 0 1px rgba(255, 248, 220, 0.6),
+                    0 0 18px rgba(245, 158, 11, 0.28),
+                    0 0 46px rgba(245, 158, 11, 0.16);
+            }
+            55% {
+                opacity: 1;
+                border-color: rgba(253, 224, 71, 1);
+                box-shadow:
+                    inset 0 0 0 1px rgba(255, 248, 220, 0.75),
+                    0 0 30px rgba(245, 158, 11, 0.42),
+                    0 0 86px rgba(245, 158, 11, 0.24);
+            }
+            100% {
+                opacity: 0;
+                border-color: rgba(251, 191, 36, 0.2);
+                box-shadow:
+                    inset 0 0 0 1px rgba(255, 248, 220, 0),
+                    0 0 0 rgba(245, 158, 11, 0),
+                    0 0 0 rgba(245, 158, 11, 0);
+            }
+        }
+
+        @keyframes selectedBorderPulse {
+            0% {
+                border-color: rgba(245, 158, 11, 0.82);
+                box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+            }
+            35% {
+                border-color: rgba(251, 191, 36, 1);
+                box-shadow:
+                    inset 0 0 0 1px rgba(251, 191, 36, 0.7),
+                    0 0 22px rgba(245, 158, 11, 0.36);
+            }
+            100% {
+                border-color: #f59e0b;
+                box-shadow: 0 0 0 rgba(245, 158, 11, 0);
+            }
+        }
+
         @keyframes scrollBob {
             0% {
                 opacity: 1;
@@ -264,6 +365,7 @@
 <body>
     <canvas id="drawingCanvas"></canvas>
     <div class="edge-glow"></div>
+    <div class="selection-ring"></div>
     <div class="border"></div>
     <div id="textOverlay" class="hidden">
         <div id="callout">
@@ -281,6 +383,7 @@
         // Setup canvas
         const canvas = document.getElementById('drawingCanvas');
         const ctx = canvas.getContext('2d');
+        let selectionPulseTimer = null;
         
         // Set canvas size to window size
         canvas.width = window.innerWidth;
@@ -469,7 +572,7 @@
                 setTimeout(() => textOverlay.classList.remove('appear'), 220);
             }
 
-            if (data.x >= 0 && data.y >= 0) {
+            if (data.x >= 0 && data.y >= 0 && !data.noPointer) {
                 const padding = 14;
                 const maxX = window.innerWidth - 340;
                 const maxY = window.innerHeight - 80;
@@ -599,6 +702,57 @@
             }
         });
 
+        function triggerSelectionPulse() {
+            if (selectionPulseTimer) {
+                clearTimeout(selectionPulseTimer);
+                selectionPulseTimer = null;
+            }
+
+            document.body.classList.remove('selection-pulse');
+            void document.body.offsetWidth;
+            document.body.classList.add('selection-pulse');
+
+            selectionPulseTimer = setTimeout(() => {
+                document.body.classList.remove('selection-pulse');
+                selectionPulseTimer = null;
+            }, 1700);
+        }
+
+        window.addEventListener('load', () => {
+            triggerSelectionPulse();
+        });
+
+        function getVideoCropRect(sourceWidth, sourceHeight, targetWidth, targetHeight) {
+            const sourceAspect = sourceWidth / sourceHeight;
+            const targetAspect = targetWidth / targetHeight;
+
+            if (!Number.isFinite(sourceAspect) || !Number.isFinite(targetAspect) || targetAspect <= 0) {
+                return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+            }
+
+            if (Math.abs(sourceAspect - targetAspect) < 0.01) {
+                return { x: 0, y: 0, width: sourceWidth, height: sourceHeight };
+            }
+
+            if (sourceAspect > targetAspect) {
+                const cropWidth = Math.max(1, Math.round(sourceHeight * targetAspect));
+                return {
+                    x: Math.max(0, Math.round((sourceWidth - cropWidth) / 2)),
+                    y: 0,
+                    width: cropWidth,
+                    height: sourceHeight
+                };
+            }
+
+            const cropHeight = Math.max(1, Math.round(sourceWidth / targetAspect));
+            return {
+                x: 0,
+                y: Math.max(0, Math.round((sourceHeight - cropHeight) / 2)),
+                width: sourceWidth,
+                height: cropHeight
+            };
+        }
+
         // Function to capture composite screenshot (screen + drawings)
         window.captureCompositeScreenshot = async function(sourceId) {
             try {
@@ -634,9 +788,25 @@
                 compositeCanvas.width = canvas.width;
                 compositeCanvas.height = canvas.height;
                 const compositeCtx = compositeCanvas.getContext('2d');
+                const crop = getVideoCropRect(
+                    video.videoWidth || canvas.width,
+                    video.videoHeight || canvas.height,
+                    canvas.width,
+                    canvas.height
+                );
 
                 // Draw the screen capture
-                compositeCtx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                compositeCtx.drawImage(
+                    video,
+                    crop.x,
+                    crop.y,
+                    crop.width,
+                    crop.height,
+                    0,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
 
                 // Draw the overlay canvas (drawings) on top
                 compositeCtx.drawImage(canvas, 0, 0);
