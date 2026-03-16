@@ -319,6 +319,23 @@ function renderHistory(items) {
     summary.textContent = `Reasoner: ${formatMs(item.reasonerDurationMs)} | ${uiaStatus} | Tree: ${formatMs(item.treeResolveElapsedMs)} | UIA: ${formatMs(item.uiaElapsedMs)} | Executor: ${executorLabel} | Executor time: ${formatMs(item.executorElapsedMs)} | Total: ${formatMs(totalRuntimeMs)} | Cost: ${formatMoney(metrics.totalCost)}`;
     wrapper.appendChild(summary);
 
+    if (item.thought) {
+      const thoughtCard = document.createElement('div');
+      thoughtCard.className = 'thought-card';
+
+      const thoughtLabel = document.createElement('div');
+      thoughtLabel.className = 'thought-label';
+      thoughtLabel.textContent = 'Thought';
+
+      const thoughtBody = document.createElement('div');
+      thoughtBody.className = 'thought-body';
+      thoughtBody.textContent = String(item.thought);
+
+      thoughtCard.appendChild(thoughtLabel);
+      thoughtCard.appendChild(thoughtBody);
+      wrapper.appendChild(thoughtCard);
+    }
+
     wrapper.appendChild(createMetricsTable(metrics));
     wrapper.appendChild(createRuntimeTable([
       { stage: 'Reasoner', detail: reasonerLabel, time: item.reasonerDurationMs },

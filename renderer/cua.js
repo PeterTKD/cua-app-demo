@@ -374,10 +374,14 @@ async function runCuaInstruction({ call, frame, strict }) {
   return { cuaResponse, action, summary, cuaDurationMs };
 }
 
-async function runTreeInstruction({ call, frame }) {
+async function runTreeInstruction({ call, frame, treePrefetchIdPromise }) {
   const locatorAction = await buildTreeLocatorAction(call, frame);
+  const prefetchId = treePrefetchIdPromise ? await treePrefetchIdPromise : null;
   const startedAt = Date.now();
-  const treeResponse = await window.electronAPI.runTreeLocator({ action: locatorAction });
+  const treeResponse = await window.electronAPI.runTreeLocator({
+    action: locatorAction,
+    prefetchId
+  });
   const treeDurationMs = Date.now() - startedAt;
   const treeResolveDurationMs = Number(treeResponse?._timings?.treeResolveDurationMs) || 0;
   const match = extractReasonerJson(treeResponse);
@@ -423,11 +427,11 @@ async function runTreeInstruction({ call, frame }) {
   };
 }
 
-async function runGuidanceInstruction({ call, frame }) {
+async function runGuidanceInstruction({ call, frame, treePrefetchIdPromise }) {
   if (call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type)) {
     const uiaStartedAt = Date.now();
     try {
-      const treeResult = await runTreeInstruction({ call, frame });
+      const treeResult = await runTreeInstruction({ call, frame, treePrefetchIdPromise });
       if (treeResult?.match) {
         return {
           ...treeResult,
@@ -823,6 +827,8 @@ export async function runCuaQuestion(question, options = {}) {
       throw new Error('Failed to capture screen frame.');
     }
 
+    const treePrefetchIdPromise = window.electronAPI.startTreePrefetch().catch(() => null);
+
     if (question && options.skipUserMessage !== true) {
       pushConversation('user', question);
     }
@@ -953,7 +959,7 @@ export async function runCuaQuestion(question, options = {}) {
 
       const executorStart = Date.now();
       const guidanceResults = await Promise.all(
-        filteredCalls.map((call) => runGuidanceInstruction({ call, frame }))
+        filteredCalls.map((call) => runGuidanceInstruction({ call, frame, treePrefetchIdPromise }))
       );
       executorElapsedMs = Date.now() - executorStart;
 

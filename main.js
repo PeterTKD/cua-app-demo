@@ -1,6 +1,7 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, screen, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 
 const { uIOhook } = require('uiohook-napi');
 let UIAutomationDetector;
@@ -52,6 +53,7 @@ let currentDisplayOriginScaleFactor = 1;
 let isOverlayClickable = false;
 let currentDisplayId = null;
 let currentDisplayBounds = null;
+const pendingTreePrefetches = new Map();
 const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
 const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
 
@@ -334,6 +336,53 @@ async function resolveTreeForSelectedDisplay() {
     }
   }
   return null;
+}
+
+function startTreePrefetch() {
+  const prefetchId = randomUUID();
+  const startedAt = Date.now();
+  const promise = (async () => {
+    try {
+      const resolvedTree = await resolveTreeForSelectedDisplay();
+      return {
+        resolvedTree,
+        treeResolveDurationMs: Date.now() - startedAt
+      };
+    } catch (error) {
+      console.warn('Background tree prefetch failed:', error.message);
+      return {
+        resolvedTree: null,
+        treeResolveDurationMs: Date.now() - startedAt
+      };
+    }
+  })();
+
+  pendingTreePrefetches.set(prefetchId, {
+    promise,
+    createdAt: Date.now()
+  });
+
+  promise.finally(() => {
+    setTimeout(() => {
+      const entry = pendingTreePrefetches.get(prefetchId);
+      if (entry?.promise === promise) {
+        pendingTreePrefetches.delete(prefetchId);
+      }
+    }, 10000);
+  });
+
+  return prefetchId;
+}
+
+async function resolveTreeFromPrefetch(prefetchId) {
+  if (!prefetchId) {
+    return null;
+  }
+  const entry = pendingTreePrefetches.get(String(prefetchId));
+  if (!entry?.promise) {
+    return null;
+  }
+  return entry.promise;
 }
 
 // Handle IPC request for desktop sources
@@ -945,6 +994,7 @@ app.on('will-quit', () => {
   // Unregister all shortcuts
   globalShortcut.unregisterAll();
   stopOSClickCapture();
+  pendingTreePrefetches.clear();
 });
 
 ipcMain.handle('resize-widget', async (event, size) => {
@@ -1085,6 +1135,10 @@ ipcMain.handle('log-to-terminal', async (event, message) => {
   return true;
 });
 
+ipcMain.handle('start-tree-prefetch', async () => {
+  return startTreePrefetch();
+});
+
 ipcMain.handle('tree-locator-run', async (event, payload) => {
   try {
     const action = payload?.action || null;
@@ -1092,9 +1146,15 @@ ipcMain.handle('tree-locator-run', async (event, payload) => {
       throw new Error('Tree locator requires action.uia_target');
     }
 
-    const treeResolveStartedAt = Date.now();
-    const resolvedTree = await resolveTreeForSelectedDisplay();
-    const treeResolveDurationMs = Date.now() - treeResolveStartedAt;
+    const prefetched = await resolveTreeFromPrefetch(payload?.prefetchId);
+    let resolvedTree = prefetched?.resolvedTree || null;
+    let treeResolveDurationMs = Number(prefetched?.treeResolveDurationMs) || 0;
+
+    if (!resolvedTree?.tree || !Array.isArray(resolvedTree.tree) || resolvedTree.tree.length === 0) {
+      const treeResolveStartedAt = Date.now();
+      resolvedTree = await resolveTreeForSelectedDisplay();
+      treeResolveDurationMs = Date.now() - treeResolveStartedAt;
+    }
     if (!resolvedTree?.tree || !Array.isArray(resolvedTree.tree) || resolvedTree.tree.length === 0) {
       console.warn('Tree locator disabled for this action: unable to resolve a non-empty UI tree from the selected screen. Falling back to CUA.');
       return {
