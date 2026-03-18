@@ -11,6 +11,10 @@ const MODELS = [
   { id: 'gpt-5.4-2026-03-05', label: 'GPT-5.4', group: 'GPT',    provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',        apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 2.5,  output: 15 } },
   { id: 'gpt-5.3-chat-latest', label: 'GPT-5.3 Chat', group: 'GPT', provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',     apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.75, output: 14 } },
   { id: 'gpt-5.2-chat-latest', label: 'GPT-5.2 Chat', group: 'GPT', provider: 'openai-responses', endpoint: 'https://api.openai.com/v1/responses',     apiKeyVar: 'OPENAI_API_KEY',    pricing: { input: 1.75, output: 14 } },
+  // Gemini OpenAI-compatible Chat Completions
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', group: 'Gemini', provider: 'gemini-openai', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeyVar: 'GEMINI_API_KEY', pricing: { input: 2, output: 12 } },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', group: 'Gemini', provider: 'gemini-openai', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeyVar: 'GEMINI_API_KEY', pricing: { input: 0.5, output: 3 } },
+  { id: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite Preview', group: 'Gemini', provider: 'gemini-openai', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeyVar: 'GEMINI_API_KEY', pricing: { input: 0.25, output: 1.5 } },
   // Anthropic
   { id: 'claude-opus-4-6',         label: 'Claude Opus 4.6',    group: 'Claude', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1/messages', apiKeyVar: 'ANTHROPIC_API_KEY', pricing: { input: 15,   output: 75  } },
   { id: 'claude-sonnet-4-6',       label: 'Claude Sonnet 4.6',  group: 'Claude', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1/messages', apiKeyVar: 'ANTHROPIC_API_KEY', pricing: { input: 3,    output: 15  } },
@@ -194,6 +198,44 @@ function buildOpenAIResponsesPayload(config, fullSystemPrompt, developerText, co
   return payload;
 }
 
+function buildGeminiOpenAICompatPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl) {
+  const systemText = developerText
+    ? `${fullSystemPrompt}\n\n${developerText}`
+    : fullSystemPrompt;
+  const messages = [];
+
+  if (systemText) {
+    messages.push({
+      role: 'system',
+      content: systemText
+    });
+  }
+
+  conversationMessages.forEach((message, index) => {
+    const isLast = index === conversationMessages.length - 1;
+    if (message.role === 'user' && isLast) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: message.text || 'Give next step' },
+          { type: 'image_url', image_url: { url: imageDataUrl } }
+        ]
+      });
+      return;
+    }
+
+    messages.push({
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: message.text || 'Give next step'
+    });
+  });
+
+  return {
+    model: config.id,
+    messages
+  };
+}
+
 
 
 // Anthropic payload + normalization live in anthropic-client.js (tool use / structured output)
@@ -202,6 +244,8 @@ function buildPayload(config, fullSystemPrompt, developerText, conversationMessa
   switch (config.provider) {
     case 'openai-responses':
       return buildOpenAIResponsesPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
+    case 'gemini-openai':
+      return buildGeminiOpenAICompatPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
     case 'anthropic':
       return buildAnthropicPayload(config, fullSystemPrompt, developerText, conversationMessages, imageDataUrl);
     default:
@@ -214,6 +258,7 @@ function buildPayload(config, fullSystemPrompt, developerText, conversationMessa
 function buildHeaders(config, apiKey) {
   switch (config.provider) {
     case 'openai-responses':
+    case 'gemini-openai':
       return {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
@@ -255,11 +300,43 @@ function normalizeOpenAIResponsesResult(json, config) {
   };
 }
 
+function normalizeGeminiOpenAICompatResult(json, config) {
+  let text = json?.choices?.[0]?.message?.content || '';
+  if (Array.isArray(text)) {
+    text = text
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item?.type === 'text' && typeof item.text === 'string') return item.text;
+        return '';
+      })
+      .join('\n')
+      .trim();
+  }
+  const usage = json?.usage || {};
+  const inputTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
+  const outputTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+  return {
+    output_text: text,
+    usage: {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: Number(usage.total_tokens ?? (inputTokens + outputTokens))
+    },
+    _meta: {
+      modelId: config.id,
+      label: config.label,
+      pricing: config.pricing
+    }
+  };
+}
+
 
 function normalizeResponse(json, config) {
   switch (config.provider) {
     case 'openai-responses':
       return normalizeOpenAIResponsesResult(json, config);
+    case 'gemini-openai':
+      return normalizeGeminiOpenAICompatResult(json, config);
     case 'anthropic':
       return normalizeAnthropicResult(json, config);
     default:
