@@ -308,16 +308,41 @@ function renderHistory(items) {
     };
 
     const setupElapsedMs = Number(item.setupElapsedMs) || 0;
+    const reasonerElapsedMs = Number(item.reasonerDurationMs) || 0;
+    const treeResolveElapsedMs = Number(item.treeResolveElapsedMs) || 0;
+    const treeLocatorElapsedMs = Number(item.treeLocatorElapsedMs) || 0;
+    const uiaElapsedMs = Number(item.uiaElapsedMs) || 0;
+    const cuaElapsedMs = Number(item.cuaElapsedMs) || 0;
+    const executorElapsedMs = Number(item.executorElapsedMs) || 0;
     const totalRuntimeMs = Number(item.totalRunDurationMs)
-      || ((Number(item.reasonerDurationMs) || 0) + (Number(item.executorElapsedMs) || 0));
+      || (reasonerElapsedMs + executorElapsedMs);
 
     const executorLabel = item.actionExecutor ? String(item.actionExecutor).toUpperCase() : 'NONE';
+    const treeOverlappedReasoner = treeResolveElapsedMs > 0 && reasonerElapsedMs > 0;
+    const executorDuplicatesUia = executorLabel === 'UIA' && Math.abs(executorElapsedMs - uiaElapsedMs) <= 20;
+    const executorDuplicatesCua = executorLabel === 'CUA' && Math.abs(executorElapsedMs - cuaElapsedMs) <= 20;
+    const showExecutorRow = executorElapsedMs > 0 && !executorDuplicatesUia && !executorDuplicatesCua;
     const uiaStatus = item.uiaAttempted
       ? (item.uiaSucceeded ? 'UIA succeeded' : `UIA failed (${formatFailureReason(item.uiaFailureReason)})`)
       : 'UIA not attempted';
     const summary = document.createElement('div');
     summary.className = 'summary';
-    summary.textContent = `Prep: ${formatMs(setupElapsedMs)} | Reasoner: ${formatMs(item.reasonerDurationMs)} | ${uiaStatus} | Tree: ${formatMs(item.treeResolveElapsedMs)} | UIA: ${formatMs(item.uiaElapsedMs)} | Executor: ${executorLabel} | Executor time: ${formatMs(item.executorElapsedMs)} | Total: ${formatMs(totalRuntimeMs)} | Cost: ${formatMoney(metrics.totalCost)}`;
+    const treeSummaryLabel = treeOverlappedReasoner ? 'Tree Prefetch' : 'Tree';
+    const treeSummarySuffix = treeOverlappedReasoner ? ' (parallel)' : '';
+    const summaryParts = [
+      `Prep: ${formatMs(setupElapsedMs)}`,
+      `Reasoner: ${formatMs(reasonerElapsedMs)}`,
+      `${treeSummaryLabel}: ${formatMs(treeResolveElapsedMs)}${treeSummarySuffix}`,
+      `${uiaStatus}`,
+      `UIA Total: ${formatMs(uiaElapsedMs)}`,
+      `Resolver: ${executorLabel}`,
+      `Total: ${formatMs(totalRuntimeMs)}`,
+      `Cost: ${formatMoney(metrics.totalCost)}`
+    ];
+    if (showExecutorRow) {
+      summaryParts.splice(6, 0, `Guidance Total: ${formatMs(executorElapsedMs)}`);
+    }
+    summary.textContent = summaryParts.join(' | ');
     wrapper.appendChild(summary);
 
     if (item.thought) {
@@ -338,26 +363,35 @@ function renderHistory(items) {
     }
 
     wrapper.appendChild(createMetricsTable(metrics));
-    wrapper.appendChild(createRuntimeTable([
+    const runtimeRows = [
       { stage: 'Prep', detail: 'Overlay reset, native capture, context build', time: setupElapsedMs },
-      { stage: 'Reasoner', detail: reasonerLabel, time: item.reasonerDurationMs },
+      { stage: 'Reasoner', detail: reasonerLabel, time: reasonerElapsedMs },
       {
-        stage: 'Tree Resolve',
-        detail: item.uiaAttempted ? `UI tree acquisition${item.uiaFailureReason ? `, ${formatFailureReason(item.uiaFailureReason)}` : ''}` : 'Not attempted',
-        time: item.treeResolveElapsedMs
-      },
-      { stage: 'Grok Locator', detail: `${Array.isArray(item.treeLocatorResponses) ? item.treeLocatorResponses.length : 0} call(s)`, time: item.treeLocatorElapsedMs },
-      {
-        stage: 'UIA Attempt',
+        stage: treeOverlappedReasoner ? 'Tree Prefetch' : 'Tree Resolve',
         detail: item.uiaAttempted
-          ? (item.uiaSucceeded ? 'Matched element and highlighted it' : `Fell back to CUA, ${formatFailureReason(item.uiaFailureReason)}`)
+          ? `UI tree acquisition${treeOverlappedReasoner ? ' (overlapped with reasoner)' : ''}${item.uiaFailureReason ? `, ${formatFailureReason(item.uiaFailureReason)}` : ''}`
           : 'Not attempted',
-        time: item.uiaElapsedMs
+        time: treeResolveElapsedMs
       },
-      { stage: 'CUA Model', detail: `${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} call(s)`, time: item.cuaElapsedMs },
-      { stage: 'Executor', detail: executorLabel, time: item.executorElapsedMs },
-      { stage: 'Run Total', detail: 'End-to-end', time: totalRuntimeMs, isTotal: true }
-    ]));
+      {
+        stage: 'Grok Locator',
+        detail: `${Array.isArray(item.treeLocatorResponses) ? item.treeLocatorResponses.length : 0} call(s)${item.uiaAttempted ? ', included in UIA total' : ''}`,
+        time: treeLocatorElapsedMs
+      },
+      {
+        stage: 'UIA Total',
+        detail: item.uiaAttempted
+          ? (item.uiaSucceeded ? 'Tree lookup, locator call, and element match' : `Fell back to CUA, ${formatFailureReason(item.uiaFailureReason)}`)
+          : 'Not attempted',
+        time: uiaElapsedMs
+      },
+      { stage: 'CUA Model', detail: `${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} call(s)`, time: cuaElapsedMs }
+    ];
+    if (showExecutorRow) {
+      runtimeRows.push({ stage: 'Guidance Total', detail: executorLabel, time: executorElapsedMs });
+    }
+    runtimeRows.push({ stage: 'Run Total', detail: 'End-to-end', time: totalRuntimeMs, isTotal: true });
+    wrapper.appendChild(createRuntimeTable(runtimeRows));
 
     const pre = document.createElement('pre');
     const payload = {
@@ -375,12 +409,12 @@ function renderHistory(items) {
       },
       timings: {
         setupMs: setupElapsedMs || 0,
-        reasonerMs: item.reasonerDurationMs || 0,
-        treeResolveMs: item.treeResolveElapsedMs || 0,
-        grokMs: item.treeLocatorElapsedMs || 0,
-        uiaMs: item.uiaElapsedMs || 0,
-        cuaMs: item.cuaElapsedMs || 0,
-        executorMs: item.executorElapsedMs || 0,
+        reasonerMs: reasonerElapsedMs || 0,
+        treeResolveMs: treeResolveElapsedMs || 0,
+        grokMs: treeLocatorElapsedMs || 0,
+        uiaMs: uiaElapsedMs || 0,
+        cuaMs: cuaElapsedMs || 0,
+        executorMs: executorElapsedMs || 0,
         totalMs: totalRuntimeMs || 0
       },
       reasoner: item.reasonerResponse || null,

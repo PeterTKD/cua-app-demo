@@ -861,6 +861,9 @@ export async function runCuaQuestion(question, options = {}) {
       throw new Error('Failed to capture screen frame.');
     }
 
+    // Start tree acquisition as early as possible so it can overlap with the reasoner.
+    const treePrefetchIdPromise = window.electronAPI.startTreePrefetch().catch(() => null);
+
     if (question && options.skipUserMessage !== true) {
       pushConversation('user', question);
     }
@@ -990,13 +993,11 @@ export async function runCuaQuestion(question, options = {}) {
     } else {
       const filteredCalls = cuaCalls;
       const needsTreePrefetch = filteredCalls.some((call) => call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type));
-      const treePrefetchIdPromise = needsTreePrefetch
-        ? window.electronAPI.startTreePrefetch().catch(() => null)
-        : null;
+      const sharedTreePrefetchIdPromise = needsTreePrefetch ? treePrefetchIdPromise : null;
 
       const executorStart = Date.now();
       const guidanceResults = await Promise.all(
-        filteredCalls.map((call) => runGuidanceInstruction({ call, frame, treePrefetchIdPromise }))
+        filteredCalls.map((call) => runGuidanceInstruction({ call, frame, treePrefetchIdPromise: sharedTreePrefetchIdPromise }))
       );
       executorElapsedMs = Date.now() - executorStart;
 

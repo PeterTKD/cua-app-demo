@@ -564,6 +564,7 @@
         const canvas = document.getElementById('drawingCanvas');
         const ctx = canvas.getContext('2d');
         let selectionPulseTimer = null;
+        let hideCalloutTimer = null;
         
         // Set canvas size to window size
         canvas.width = window.innerWidth;
@@ -739,6 +740,12 @@
             const keycaps = document.getElementById('keycaps');
             const nextButton = document.getElementById('calloutNext');
             const hideCallout = data.hideCallout === true;
+            const shouldHideCallout = hideCallout || (!data.body && !data.heading);
+
+            if (hideCalloutTimer) {
+                clearTimeout(hideCalloutTimer);
+                hideCalloutTimer = null;
+            }
 
             calloutHeader.textContent = data.heading || '';
             calloutBody.innerHTML = renderMarkdown(data.body || '');
@@ -784,13 +791,18 @@
                 textOverlay.classList.remove('interactive');
                 callout.classList.remove('draggable');
             }
-            if (hideCallout || (!data.body && !data.heading)) {
+            if (shouldHideCallout) {
                 textOverlay.classList.remove('appear');
-                textOverlay.classList.add('exit');
-                setTimeout(() => {
-                    textOverlay.classList.add('hidden');
+                if (textOverlay.classList.contains('hidden')) {
                     textOverlay.classList.remove('exit');
-                }, 200);
+                } else {
+                    textOverlay.classList.add('exit');
+                    hideCalloutTimer = setTimeout(() => {
+                        textOverlay.classList.add('hidden');
+                        textOverlay.classList.remove('exit');
+                        hideCalloutTimer = null;
+                    }, 200);
+                }
             } else {
                 textOverlay.classList.remove('hidden');
                 textOverlay.classList.remove('exit');

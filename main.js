@@ -55,6 +55,7 @@ let isOverlayClickable = false;
 let currentDisplayId = null;
 let currentDisplayBounds = null;
 const pendingTreePrefetches = new Map();
+const captureExcludedWindows = new WeakSet();
 const PROMPTS_DIR = process.env.CUA_PROMPTS_DIR || path.join(__dirname, 'prompts');
 const PROMPT_VERSION = process.env.CUA_PROMPT_VERSION || null;
 
@@ -139,6 +140,28 @@ function promoteMainWindow({ force = false } = {}) {
   }
 
   promoteWidgetWindow(mainWindow);
+}
+
+async function applyWindowCaptureExclusion(win, label = 'Window') {
+  if (!win || win.isDestroyed() || typeof uiAutomation?.setWindowExcludeFromCapture !== 'function') {
+    return false;
+  }
+  try {
+    const hwndBuffer = win.getNativeWindowHandle();
+    const hwnd = Number(hwndBuffer.readBigInt64LE ? hwndBuffer.readBigInt64LE(0) : hwndBuffer.readInt32LE(0));
+    await uiAutomation.setWindowExcludeFromCapture(hwnd);
+    captureExcludedWindows.add(win);
+    console.log(`[${label}] SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied, hwnd:`, hwnd);
+    return true;
+  } catch (error) {
+    captureExcludedWindows.delete(win);
+    console.warn(`[${label}] Could not set WDA_EXCLUDEFROMCAPTURE:`, error.message);
+    return false;
+  }
+}
+
+function isWindowCaptureExcluded(win) {
+  return Boolean(win) && captureExcludedWindows.has(win);
 }
 
 function getScaleFactorSafe(display) {
@@ -562,6 +585,7 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
       contextIsolation: true
     }
   });
+  await applyWindowCaptureExclusion(overlayWindow, 'Overlay');
 
   promoteWidgetWindow(overlayWindow);
   overlayWindow.setBounds(overlayBounds, false);
@@ -575,16 +599,6 @@ ipcMain.handle('show-border-overlay', async (event, displayId) => {
     overlayWindow.showInactive();
   });
   overlayWindow.loadFile('overlay.html');
-
-  // Exclude the transparent overlay from screen captures so it doesn't appear as a green rectangle
-  try {
-    const hwndBuffer = overlayWindow.getNativeWindowHandle();
-    const hwnd = Number(hwndBuffer.readBigInt64LE ? hwndBuffer.readBigInt64LE(0) : hwndBuffer.readInt32LE(0));
-    await uiAutomation.setWindowExcludeFromCapture(hwnd);
-    console.log('[Overlay] SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) applied, hwnd:', hwnd);
-  } catch (e) {
-    console.warn('[Overlay] Could not set WDA_EXCLUDEFROMCAPTURE:', e.message);
-  }
 
   return true;
 });
@@ -612,7 +626,8 @@ ipcMain.handle('show-callout', async (event, payload) => {
     return false;
   }
   overlayWindow.webContents.send('update-callout', { ...payload, hideCallout: true });
-  if (!calloutWindow || calloutWindow.isDestroyed()) {
+  const hasText = payload && (payload.heading || payload.body);
+  if (hasText && (!calloutWindow || calloutWindow.isDestroyed())) {
     calloutWindow = new BrowserWindow({
       width: 460,
       height: 180,
@@ -623,19 +638,20 @@ ipcMain.handle('show-callout', async (event, payload) => {
       resizable: false,
       movable: true,
       focusable: true,
+      show: false,
       webPreferences: {
         preload: path.join(__dirname, 'callout-preload.js'),
         nodeIntegration: false,
         contextIsolation: true
       }
     });
+    await applyWindowCaptureExclusion(calloutWindow, 'Callout');
     promoteWidgetWindow(calloutWindow);
     calloutWindow.loadFile('callout-window.html');
     calloutWindow.on('closed', () => {
       calloutWindow = null;
     });
   }
-  const hasText = payload && (payload.heading || payload.body);
   if (hasText) {
     const displayBounds = currentDisplayBounds || { x: 0, y: 0, width: 1920, height: 1080 };
     const baseX = displayBounds.x || 0;
@@ -847,12 +863,13 @@ async function toggleOverlayClickable() {
   } else {
     // Make overlay transparent to mouse - enable forwarding
     // First, capture screenshot of the screen with drawings
+    const shouldHideOverlayForCapture = !isWindowCaptureExcluded(overlayWindow);
     try {
-      // Hide the overlay temporarily to avoid capturing it
-      overlayWindow.hide();
-      
-      // Wait a bit for the overlay to be hidden
-      await new Promise(resolve => setTimeout(resolve, 100));
+      if (shouldHideOverlayForCapture) {
+        // Fallback for environments where capture exclusion is unavailable.
+        overlayWindow.hide();
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       
       // Find the screen source for the current display
       const sources = await desktopCapturer.getSources({ 
@@ -869,12 +886,13 @@ async function toggleOverlayClickable() {
         await overlayWindow.webContents.executeJavaScript(`window.captureCompositeScreenshot('${source.id}')`);
       }
       
-      // Show the overlay again
-      overlayWindow.show();
+      if (shouldHideOverlayForCapture && overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.showInactive();
+      }
     } catch (err) {
       console.error('Error capturing screenshot:', err);
-      if (overlayWindow) {
-        overlayWindow.show();
+      if (shouldHideOverlayForCapture && overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.showInactive();
       }
     }
     
@@ -905,6 +923,7 @@ function createWindow() {
       contextIsolation: true
     }
   });
+  void applyWindowCaptureExclusion(mainWindow, 'Main');
   promoteMainWindow({ force: true });
 
   // Enable screen sharing and microphone access
@@ -1109,10 +1128,14 @@ function getScaledCaptureSize(width, height, maxDimension = 1280) {
 async function captureNativeScreenshot() {
   const appWindows = [mainWindow, overlayWindow, calloutWindow, highlightWindow]
     .filter(w => w && !w.isDestroyed());
+  const requiresOpacityFallback = appWindows.some((win) => !isWindowCaptureExcluded(win));
 
   try {
-    appWindows.forEach(w => w.setOpacity(0));
-    await new Promise(r => setTimeout(r, 16)); // allow one compositor frame after hiding overlays
+    if (requiresOpacityFallback) {
+      appWindows.forEach((win) => win.setOpacity(0));
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+
     const parsedDisplayId = currentDisplayId ? parseInt(currentDisplayId, 10) : NaN;
     const displayId = Number.isFinite(parsedDisplayId) ? parsedDisplayId : undefined;
 
@@ -1147,7 +1170,15 @@ async function captureNativeScreenshot() {
     console.warn('[Screenshot] Capture failed:', e.message);
     return null;
   } finally {
-    appWindows.forEach(w => w.setOpacity(1));
+    if (requiresOpacityFallback) {
+      appWindows.forEach((win) => {
+        try {
+          win.setOpacity(1);
+        } catch (_) {
+          // Ignore windows that were destroyed during capture.
+        }
+      });
+    }
     promoteMainWindow({ force: true });
   }
 }
@@ -1577,6 +1608,7 @@ ipcMain.handle('show-element-highlight', async (event, { x, y, width, height, co
         contextIsolation: true
       }
     });
+    await applyWindowCaptureExclusion(highlightWindow, 'Highlight');
 
     promoteWidgetWindow(highlightWindow);
     highlightWindow.setIgnoreMouseEvents(true, { forward: true });
