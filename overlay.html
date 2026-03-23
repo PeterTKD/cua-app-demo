@@ -136,15 +136,20 @@
             opacity: 0.6;
         }
 
+        :root {
+            --widget-panel: rgba(5, 9, 18, 0.96);
+            --widget-shadow: 0 18px 35px rgba(2, 6, 16, 0.42);
+        }
+
         #callout {
             font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-            background: rgba(17, 24, 39, 0.92);
+            background: var(--widget-panel);
             padding: 16px 18px;
             border-radius: 14px;
             font-size: 17px;
             line-height: 1.4;
             max-width: 420px;
-            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+            box-shadow: var(--widget-shadow);
             border: 2px solid #f59e0b;
             display: grid;
             gap: 10px;
@@ -677,6 +682,39 @@
             return html;
         }
 
+        function hexToRgb(value) {
+            const hex = String(value || '').trim();
+            const match = hex.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+            if (!match) return null;
+            const raw = match[1];
+            const normalized = raw.length === 3
+                ? raw.split('').map((char) => char + char).join('')
+                : raw;
+            const int = Number.parseInt(normalized, 16);
+            return {
+                r: (int >> 16) & 255,
+                g: (int >> 8) & 255,
+                b: int & 255
+            };
+        }
+
+        function resolveCalloutBackground(accentColor) {
+            const rgb = hexToRgb(accentColor);
+            if (!rgb) {
+                return 'var(--widget-panel)';
+            }
+            return `linear-gradient(180deg, rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.28) 0%, rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12) 100%), linear-gradient(180deg, rgba(5, 9, 18, 0.96), rgba(5, 9, 18, 0.96))`;
+        }
+
+        function resolveButtonTextColor(accentColor) {
+            const rgb = hexToRgb(accentColor);
+            if (!rgb) {
+                return '#1f2937';
+            }
+            const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+            return luminance >= 0.62 ? '#111827' : '#f8fafc';
+        }
+
         function updateCallout(data) {
             if (data && typeof data.text === 'string' && !data.body) {
                 data = {
@@ -699,6 +737,7 @@
             const pointerEnd = document.getElementById('pointerEnd');
             const callout = document.getElementById('callout');
             const keycaps = document.getElementById('keycaps');
+            const nextButton = document.getElementById('calloutNext');
             const hideCallout = data.hideCallout === true;
 
             calloutHeader.textContent = data.heading || '';
@@ -715,13 +754,25 @@
 
             if (data.borderColor) {
                 callout.style.borderColor = data.borderColor;
+                callout.style.background = resolveCalloutBackground(data.borderColor);
                 pointer.style.background = data.borderColor;
                 pointer.style.boxShadow = `0 0 0 6px ${data.borderColor}40, 0 0 16px ${data.borderColor}99`;
                 pointerEnd.style.background = data.borderColor;
                 pointerEnd.style.boxShadow = `0 0 0 5px ${data.borderColor}33, 0 0 12px ${data.borderColor}88`;
+            } else {
+                callout.style.background = 'var(--widget-panel)';
             }
             if (data.headingColor) {
                 calloutHeader.style.color = data.headingColor;
+            }
+            if (data.showNext && data.borderColor) {
+                nextButton.style.background = data.borderColor;
+                nextButton.style.color = resolveButtonTextColor(data.borderColor);
+                nextButton.style.boxShadow = `0 10px 22px ${data.borderColor}3d`;
+            } else {
+                nextButton.style.background = '#f59e0b';
+                nextButton.style.color = '#1f2937';
+                nextButton.style.boxShadow = 'none';
             }
             const allowClickThrough = data.allowClickThrough !== false;
             if (data.showNext && !allowClickThrough && !hideCallout) {
