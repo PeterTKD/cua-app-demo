@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   detectElementAtPoint: (x, y) => ipcRenderer.invoke('ui-automation-detect-point', { x, y }),
   showElementHighlight: (x, y, width, height, color) => ipcRenderer.invoke('show-element-highlight', { x, y, width, height, color }),
   hideElementHighlight: () => ipcRenderer.invoke('hide-element-highlight'),
+  captureRunFrame: (options) => ipcRenderer.invoke('capture-run-frame', options),
+  getCapturedFrameDataUrl: (payload) => ipcRenderer.invoke('capture-frame-data-url', payload),
   runCuaQuestion: (payload) => ipcRenderer.invoke('cua-run', payload),
   runReasonerQuestion: (payload) => ipcRenderer.invoke('reasoner-run', payload),
   startTreePrefetch: () => ipcRenderer.invoke('start-tree-prefetch'),

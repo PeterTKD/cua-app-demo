@@ -104,6 +104,35 @@ function hasDiscrepancy(expectedAction, actualActionPayload) {
   return false;
 }
 
+function normalizeCapturedFrame(frame) {
+  if (!frame || typeof frame !== 'object') return null;
+  return {
+    ...frame,
+    getDataUrl() {
+      return frame.dataUrl || frame.reasonerDataUrl || null;
+    }
+  };
+}
+
+async function resolveFrameDataUrl(frame) {
+  if (!frame) return null;
+  if (frame.dataUrl) {
+    return frame.dataUrl;
+  }
+  if (frame.frameId) {
+    const dataUrl = await window.electronAPI.getCapturedFrameDataUrl({
+      frameId: frame.frameId,
+      quality: 82
+    }).catch(() => null);
+    if (dataUrl) {
+      frame.dataUrl = dataUrl;
+      return dataUrl;
+    }
+    return null;
+  }
+  return frame.getDataUrl();
+}
+
 function extractReasonerJson(response) {
   if (!response) {
     throw new Error('Empty reasoner response');
@@ -359,9 +388,11 @@ async function runCuaInstruction({ call, frame, strict }) {
   const cuaAction = call.action_type === 'pinpoint' ? 'click' : call.action_type;
   const promptQuestion = `Action: ${cuaAction}\nInstruction: ${call.target_description}`;
   const startedAt = Date.now();
+  const imageDataUrl = await resolveFrameDataUrl(frame);
   const cuaResponse = await window.electronAPI.runCuaQuestion({
     question: promptQuestion,
-    imageDataUrl: frame.dataUrl,
+    imageDataUrl,
+    frameId: frame.frameId || null,
     displayWidth: frame.width,
     displayHeight: frame.height,
     strict
@@ -530,7 +561,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
       allowClickThrough: true
     };
     pendingAction = false;
-    return { action: null, summary, hasPointer: false, actionType: 'callout', executor: 'cua' };
+    return { action: null, summary: fallbackText, hasPointer: false, actionType: 'callout', executor: 'cua' };
   }
 
   const displayInfo = await window.electronAPI.getSharedDisplayBounds();
@@ -669,7 +700,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
           element.BoundingRect.Y,
           element.BoundingRect.Width,
           element.BoundingRect.Height,
-          '#f59e0b'
+          '#3B82F6'
         );
       }
     })();
@@ -682,7 +713,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   }
 
   const hasPointer = ['click', 'double_click', 'drag', 'pinpoint'].includes(normalizedActionType);
-  return { action, summary, element: null, hasPointer, actionType: normalizedActionType, executor: 'cua' };
+  return { action, summary: resolvedBody, element: null, hasPointer, actionType: normalizedActionType, executor: 'cua' };
 }
 
 async function presentTreeAction({ match, summary, actionTypeOverride, calloutText, calloutType }) {
@@ -780,7 +811,7 @@ async function presentTreeAction({ match, summary, actionTypeOverride, calloutTe
 
   await Promise.allSettled([
     window.electronAPI.showCallout(calloutPayload),
-    window.electronAPI.showElementHighlight(bounds.x, bounds.y, bounds.width, bounds.height, '#f59e0b')
+    window.electronAPI.showElementHighlight(bounds.x, bounds.y, bounds.width, bounds.height, '#3B82F6')
   ]);
 
   return {
@@ -800,8 +831,7 @@ export async function runCuaQuestion(question, options = {}) {
 
   const runStartedAt = Date.now();
   const delayMs = Number.isFinite(options.delayMs) ? options.delayMs : 0;
-  const captureDelayMs = Number.isFinite(options.captureDelayMs) ? options.captureDelayMs : 200;
-  const fastCapture = options.fastCapture === true;
+  const captureDelayMs = Number.isFinite(options.captureDelayMs) ? options.captureDelayMs : 0;
   await window.electronAPI.setLoadingState(true);
   try {
     await window.electronAPI.setWidgetVisible(true);
@@ -817,17 +847,19 @@ export async function runCuaQuestion(question, options = {}) {
     if (captureDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
     }
-    await waitForFreshVideoFrame();
-    if (!fastCapture) {
+    frame = normalizeCapturedFrame(await window.electronAPI.captureRunFrame({
+      includeFull: false,
+      cacheFull: true,
+      maxDimension: 1280
+    }).catch(() => null));
+    if (!frame) {
       await waitForFreshVideoFrame();
+      frame = normalizeCapturedFrame(captureFrame());
     }
-    frame = captureFrame();
 
     if (!frame) {
       throw new Error('Failed to capture screen frame.');
     }
-
-    const treePrefetchIdPromise = window.electronAPI.startTreePrefetch().catch(() => null);
 
     if (question && options.skipUserMessage !== true) {
       pushConversation('user', question);
@@ -856,12 +888,14 @@ export async function runCuaQuestion(question, options = {}) {
       reasonerContext.user_status = options.userStatus;
     }
 
+    const setupElapsedMs = Date.now() - runStartedAt;
     const reasonerStart = Date.now();
-    const reasonerImage = frame.reasonerDataUrl || frame.dataUrl;
+    const reasonerImage = frame.reasonerDataUrl || frame.getDataUrl();
     let reasonerResponse, reasonerDurationMs, reasonerJson;
     try {
       reasonerResponse = await window.electronAPI.runReasonerQuestion({
         context: reasonerContext,
+        frameId: frame.frameId || null,
         imageDataUrl: reasonerImage
       });
       reasonerDurationMs = Date.now() - reasonerStart;
@@ -870,7 +904,7 @@ export async function runCuaQuestion(question, options = {}) {
     } catch (reasonerError) {
       addHistoryItem({
         question: question || '(auto)',
-        screenshot: frame.dataUrl,
+        screenshot: frame.reasonerDataUrl || frame.getDataUrl(),
         answer: `Error: ${reasonerError.message}`,
         thought: null,
         ttsEnabled: false,
@@ -878,6 +912,7 @@ export async function runCuaQuestion(question, options = {}) {
         actionExecutor: null,
         actionSummary: null,
         reasonerResponse: reasonerResponse || null,
+        setupElapsedMs,
         reasonerDurationMs: Date.now() - reasonerStart,
         treeLocatorElapsedMs: 0,
         treeResolveElapsedMs: 0,
@@ -953,9 +988,11 @@ export async function runCuaQuestion(question, options = {}) {
         pendingAction = false;
       }
     } else {
-      const filteredCalls = cuaCalls.length > 1
-        ? cuaCalls.filter((call) => call.action_type === 'pinpoint')
-        : cuaCalls;
+      const filteredCalls = cuaCalls;
+      const needsTreePrefetch = filteredCalls.some((call) => call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type));
+      const treePrefetchIdPromise = needsTreePrefetch
+        ? window.electronAPI.startTreePrefetch().catch(() => null)
+        : null;
 
       const executorStart = Date.now();
       const guidanceResults = await Promise.all(
@@ -1055,17 +1092,19 @@ export async function runCuaQuestion(question, options = {}) {
       }
     }
 
+    const displayAnswer = reasonerJson.answer || result.summary || null;
     const historyQuestion = question || '(auto)';
     addHistoryItem({
       question: historyQuestion,
-      screenshot: frame.dataUrl,
-      answer: reasonerJson.answer || null,
+      screenshot: frame.reasonerDataUrl || frame.getDataUrl(),
+      answer: displayAnswer,
       thought: reasonerJson.thought || null,
       ttsEnabled: options.ttsEnabled === true,
       actionType: result.actionType || null,
       actionExecutor: result.executor || null,
       actionSummary: result.summary || null,
       reasonerResponse: reasonerResponse,
+      setupElapsedMs,
       reasonerDurationMs,
       treeLocatorElapsedMs,
       treeResolveElapsedMs,
@@ -1081,7 +1120,7 @@ export async function runCuaQuestion(question, options = {}) {
     });
 
     return {
-      answer: reasonerJson.answer || null,
+      answer: displayAnswer,
       thought: reasonerJson.thought || null,
       action: result.action,
       summary: result.summary,

@@ -25,5 +25,9 @@ export const appState = {
   isTTSEnabled: false,
   currentAudio: null,
   currentAudioUrl: null,
-  activeStreamInterval: null
+  activeStreamInterval: null,
+  activeStreamTarget: null,
+  activeStreamMessage: '',
+  activeStreamOnDone: null,
+  actionMessageBubbles: []
 };

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, screen, globalShortcut, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
@@ -6,6 +6,7 @@ const { randomUUID } = require('crypto');
 const { uIOhook } = require('uiohook-napi');
 let UIAutomationDetector;
 let uiAutomationBackend = 'edge';
+const capturedFrameCache = new Map();
 try {
   UIAutomationDetector = require('./ui-automation-edge');
 } catch (error) {
@@ -891,6 +892,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 680,
     height: 220,
+    icon: path.join(__dirname, 'Icon.png'),
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -1003,13 +1005,12 @@ ipcMain.handle('resize-widget', async (event, size) => {
   }
   const minWidth = 160;
   const minHeight = 100;
-  const maxHeightLimit = 720;
 
   const width = Math.max(minWidth, Math.round(size.width || 0));
   const height = Math.max(minHeight, Math.round(size.height || 0));
   const display = screen.getDisplayMatching(mainWindow.getBounds());
   const maxWidth = Math.max(minWidth, display.workArea.width - 8);
-  const maxHeight = Math.max(minHeight, Math.min(maxHeightLimit, display.workArea.height - 8));
+  const maxHeight = Math.max(minHeight, display.workArea.height - 8);
   const nextWidth = Math.min(width, maxWidth);
   const nextHeight = Math.min(height, maxHeight);
 
@@ -1057,6 +1058,53 @@ ipcMain.handle('ui-automation-detect-point', async (event, { x, y }) => {
   }
 });
 
+function buildJpegDataUrl(image, quality = 82) {
+  if (!image || image.isEmpty()) {
+    return null;
+  }
+  return `data:image/jpeg;base64,${image.toJPEG(quality).toString('base64')}`;
+}
+
+function pruneCapturedFrameCache(maxAgeMs = 5 * 60 * 1000, maxEntries = 12) {
+  const now = Date.now();
+  for (const [frameId, entry] of capturedFrameCache.entries()) {
+    if (!entry || now - entry.createdAt > maxAgeMs) {
+      capturedFrameCache.delete(frameId);
+    }
+  }
+  while (capturedFrameCache.size > maxEntries) {
+    const oldestKey = capturedFrameCache.keys().next().value;
+    if (!oldestKey) break;
+    capturedFrameCache.delete(oldestKey);
+  }
+}
+
+function getCachedCapturedFrame(frameId) {
+  pruneCapturedFrameCache();
+  if (!frameId) return null;
+  return capturedFrameCache.get(frameId)?.capture || null;
+}
+
+function getCapturedFrameDataUrl(capture, quality = 82) {
+  if (!capture) return null;
+  if (capture.dataUrl) return capture.dataUrl;
+  return buildJpegDataUrl(capture.image, quality);
+}
+
+function getScaledCaptureSize(width, height, maxDimension = 1280) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return { width: 0, height: 0 };
+  }
+  if (!Number.isFinite(maxDimension) || maxDimension <= 0) {
+    return { width, height };
+  }
+  const scale = Math.min(1, maxDimension / Math.max(width, height));
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale))
+  };
+}
+
 // Computer Use (CUA) handler
 async function captureNativeScreenshot() {
   const appWindows = [mainWindow, overlayWindow, calloutWindow, highlightWindow]
@@ -1064,7 +1112,7 @@ async function captureNativeScreenshot() {
 
   try {
     appWindows.forEach(w => w.setOpacity(0));
-    await new Promise(r => setTimeout(r, 30)); // one frame for DWM to recompose
+    await new Promise(r => setTimeout(r, 16)); // allow one compositor frame after hiding overlays
     const parsedDisplayId = currentDisplayId ? parseInt(currentDisplayId, 10) : NaN;
     const displayId = Number.isFinite(parsedDisplayId) ? parsedDisplayId : undefined;
 
@@ -1073,7 +1121,7 @@ async function captureNativeScreenshot() {
         const image = await screen.captureDisplay(displayId);
         if (image && !image.isEmpty()) {
           const size = image.getSize();
-          return { dataUrl: image.toDataURL(), width: size.width, height: size.height };
+          return { image, width: size.width, height: size.height, source: 'screen.captureDisplay' };
         }
         console.warn('[Screenshot] screen.captureDisplay returned an empty image.');
       } catch (error) {
@@ -1088,7 +1136,8 @@ async function captureNativeScreenshot() {
         return {
           dataUrl: `data:image/jpeg;base64,${base64}`,
           width: bounds.width,
-          height: bounds.height
+          height: bounds.height,
+          source: 'uiAutomation.captureScreenNative'
         };
       }
     }
@@ -1103,10 +1152,91 @@ async function captureNativeScreenshot() {
   }
 }
 
+async function captureRunFrame(options = {}) {
+  const includeFull = options?.includeFull !== false;
+  const cacheFull = options?.cacheFull !== false;
+  const maxDimension = Number.isFinite(options?.maxDimension) ? Number(options.maxDimension) : 1280;
+  const fullQuality = Number.isFinite(options?.fullQuality) ? Number(options.fullQuality) : 82;
+  const reasonerQuality = Number.isFinite(options?.reasonerQuality) ? Number(options.reasonerQuality) : 72;
+  const capture = await captureNativeScreenshot();
+  if (!capture) {
+    return null;
+  }
+
+  let image = capture.image || null;
+  if ((!image || image.isEmpty()) && capture.dataUrl) {
+    try {
+      image = nativeImage.createFromDataURL(capture.dataUrl);
+    } catch (_) {
+      image = null;
+    }
+  }
+
+  const width = Number(capture.width) || image?.getSize()?.width || 0;
+  const height = Number(capture.height) || image?.getSize()?.height || 0;
+  if (!width || !height) {
+    return null;
+  }
+
+  let frameId = null;
+  if (cacheFull) {
+    pruneCapturedFrameCache();
+    frameId = randomUUID();
+    capturedFrameCache.set(frameId, {
+      capture,
+      createdAt: Date.now()
+    });
+  }
+
+  const scaledSize = getScaledCaptureSize(width, height, maxDimension);
+  let reasonerDataUrl = capture.dataUrl || null;
+  if (image && !image.isEmpty()) {
+    const shouldResize = scaledSize.width !== width || scaledSize.height !== height;
+    const reasonerImage = shouldResize
+      ? image.resize({ width: scaledSize.width, height: scaledSize.height, quality: 'good' })
+      : image;
+    reasonerDataUrl = buildJpegDataUrl(reasonerImage, reasonerQuality) || reasonerDataUrl;
+  }
+
+  let dataUrl = null;
+  if (includeFull) {
+    dataUrl = getCapturedFrameDataUrl(capture, fullQuality);
+  }
+
+  return {
+    frameId,
+    dataUrl,
+    width,
+    height,
+    reasonerDataUrl: reasonerDataUrl || dataUrl,
+    reasonerWidth: scaledSize.width || width,
+    reasonerHeight: scaledSize.height || height,
+    captureSource: capture.source || 'unknown'
+  };
+}
+
 ipcMain.handle('cua-run', async (event, payload) => {
   try {
-    const native = await captureNativeScreenshot();
-    if (native) payload = { ...payload, imageDataUrl: native.dataUrl, displayWidth: native.width, displayHeight: native.height };
+    if (!payload?.imageDataUrl || !payload?.displayWidth || !payload?.displayHeight) {
+      const cachedCapture = getCachedCapturedFrame(payload?.frameId);
+      const cachedDataUrl = getCapturedFrameDataUrl(cachedCapture);
+      if (cachedDataUrl && payload?.displayWidth && payload?.displayHeight) {
+        payload = {
+          ...payload,
+          imageDataUrl: cachedDataUrl
+        };
+      } else {
+        const native = await captureRunFrame({ includeFull: true, maxDimension: 0 });
+        if (native) {
+          payload = {
+            ...payload,
+            imageDataUrl: native.dataUrl || native.reasonerDataUrl,
+            displayWidth: native.width,
+            displayHeight: native.height
+          };
+        }
+      }
+    }
     const response = await runCuaQuestion(payload);
     return response;
   } catch (error) {
@@ -1117,8 +1247,20 @@ ipcMain.handle('cua-run', async (event, payload) => {
 
 ipcMain.handle('reasoner-run', async (event, payload) => {
   try {
-    const native = await captureNativeScreenshot();
-    if (native) payload = { ...payload, imageDataUrl: native.dataUrl };
+    if (!payload?.imageDataUrl) {
+      const cachedDataUrl = getCapturedFrameDataUrl(getCachedCapturedFrame(payload?.frameId), 72);
+      if (cachedDataUrl) {
+        payload = {
+          ...payload,
+          imageDataUrl: cachedDataUrl
+        };
+      } else {
+        const native = await captureRunFrame({ includeFull: false });
+        if (native?.reasonerDataUrl) {
+          payload = { ...payload, imageDataUrl: native.reasonerDataUrl };
+        }
+      }
+    }
     const response = await runReasonerQuestion(payload);
     return response;
   } catch (error) {
@@ -1133,6 +1275,25 @@ ipcMain.handle('log-to-terminal', async (event, message) => {
     console.log(text);
   }
   return true;
+});
+
+ipcMain.handle('capture-run-frame', async (event, options) => {
+  try {
+    return await captureRunFrame(options);
+  } catch (error) {
+    console.error('Capture frame error:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('capture-frame-data-url', async (event, payload) => {
+  try {
+    const quality = Number.isFinite(payload?.quality) ? Number(payload.quality) : 82;
+    return getCapturedFrameDataUrl(getCachedCapturedFrame(payload?.frameId), quality);
+  } catch (error) {
+    console.error('Capture frame data url error:', error);
+    throw error;
+  }
 });
 
 ipcMain.handle('start-tree-prefetch', async () => {

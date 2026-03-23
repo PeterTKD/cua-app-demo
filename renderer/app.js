@@ -4,6 +4,7 @@ import {
   clearCurrentAction,
   clearTargetRect,
   fadeGuidance,
+  getLastCuaSummary,
   getCurrentAction,
   addConversationNote,
   handleActionCriteriaMet,
@@ -16,7 +17,7 @@ import { ensureVideoReady, selectScreen, stopShare } from './screen-share.js';
 import { appState, APP_MODES } from './state.js';
 import { requestWidgetResize, setupResizeObserver } from './resize.js';
 import { stopCurrentAudio, speakText } from './tts.js';
-import { addChatMessage, addSystemMessage, clearChatLog } from './chat.js';
+import { addChatMessage, clearChatLog, markLastActionCompleted } from './chat.js';
 import {
   setAppMode,
   setGuideProcessActive,
@@ -38,11 +39,11 @@ let speechInterimTimer = null;
 function setStatus(message, tone = 'default') {
   elements.statusText.textContent = message;
   if (tone === 'error') {
-    elements.statusText.style.color = '#b42318';
+    elements.statusText.style.color = '#fda4af';
   } else if (tone === 'success') {
-    elements.statusText.style.color = '#0f766e';
+    elements.statusText.style.color = '#6ee7b7';
   } else {
-    elements.statusText.style.color = '#44536c';
+    elements.statusText.style.color = '#8fa1be';
   }
 }
 
@@ -121,7 +122,12 @@ function completeStep(message) {
   }
   addHistoryNote('User Completed The Action');
   addConversationNote('User Completed The Action');
-  addSystemMessage('Action Completed');
+  if (!markLastActionCompleted(action.type)) {
+    addChatMessage(getLastCuaSummary() || 'Action completed.', 'assistant', {
+      actionType: action.type,
+      completed: true
+    });
+  }
   const followupDelayMs = appState.appMode === APP_MODES.GUIDE ? 250 : 2000;
   const settleDelayMs = appState.appMode === APP_MODES.GUIDE ? 250 : 1000;
   const stepEpoch = appState.guideProcessEpoch;
@@ -151,10 +157,10 @@ function completeTaskAndReset() {
   resetCuaState();
   clearHistory();
   appState.lastQuestion = '';
+  appState.actionMessageBubbles = [];
   elements.questionInput.value = '';
   setStatus('Task completed. Ready for a new question.', 'success');
   setGuideProcessActive(false);
-  clearChatLog();
   window.electronAPI.showCallout({ heading: '', body: '', x: -1, y: -1, showNext: false });
   window.electronAPI.hideElementHighlight();
   setTaskButtonsEnabled(false);
@@ -348,7 +354,10 @@ async function handleAsk(options = {}) {
     }
     const result = await runCuaQuestion(question, runOptions);
     if (result && result.answer) {
-      addChatMessage(result.answer, 'assistant');
+      const primaryPlannedActionType = result.reasoner?.actions?.[0]?.action_type || null;
+      const chatActionType = primaryPlannedActionType
+        || (result.actionType && result.actionType !== 'callout' ? result.actionType : null);
+      addChatMessage(result.answer, 'assistant', { actionType: chatActionType });
     }
     await logThoughtToTerminal(result);
     if (result && result.answer) {

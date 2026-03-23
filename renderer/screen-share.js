@@ -137,13 +137,21 @@ export function captureFrame() {
   const scaledCtx = scaledCanvas.getContext('2d');
   scaledCtx.drawImage(fullCanvas, 0, 0, targetWidth, targetHeight);
 
+  const reasonerDataUrl = scaledCanvas.toDataURL('image/webp', 0.7);
+  let fullDataUrl = null;
+
   return {
-    dataUrl: fullCanvas.toDataURL('image/webp'),
     width: fullCanvas.width,
     height: fullCanvas.height,
-    reasonerDataUrl: scaledCanvas.toDataURL('image/webp', 0.7),
+    reasonerDataUrl,
     reasonerWidth: scaledCanvas.width,
-    reasonerHeight: scaledCanvas.height
+    reasonerHeight: scaledCanvas.height,
+    getDataUrl() {
+      if (!fullDataUrl) {
+        fullDataUrl = fullCanvas.toDataURL('image/webp');
+      }
+      return fullDataUrl;
+    }
   };
 }
 

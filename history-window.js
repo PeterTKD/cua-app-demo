@@ -307,6 +307,7 @@ function renderHistory(items) {
       totalCost: reasonerCost + grokCost + cuaCost + ttsCost
     };
 
+    const setupElapsedMs = Number(item.setupElapsedMs) || 0;
     const totalRuntimeMs = Number(item.totalRunDurationMs)
       || ((Number(item.reasonerDurationMs) || 0) + (Number(item.executorElapsedMs) || 0));
 
@@ -316,7 +317,7 @@ function renderHistory(items) {
       : 'UIA not attempted';
     const summary = document.createElement('div');
     summary.className = 'summary';
-    summary.textContent = `Reasoner: ${formatMs(item.reasonerDurationMs)} | ${uiaStatus} | Tree: ${formatMs(item.treeResolveElapsedMs)} | UIA: ${formatMs(item.uiaElapsedMs)} | Executor: ${executorLabel} | Executor time: ${formatMs(item.executorElapsedMs)} | Total: ${formatMs(totalRuntimeMs)} | Cost: ${formatMoney(metrics.totalCost)}`;
+    summary.textContent = `Prep: ${formatMs(setupElapsedMs)} | Reasoner: ${formatMs(item.reasonerDurationMs)} | ${uiaStatus} | Tree: ${formatMs(item.treeResolveElapsedMs)} | UIA: ${formatMs(item.uiaElapsedMs)} | Executor: ${executorLabel} | Executor time: ${formatMs(item.executorElapsedMs)} | Total: ${formatMs(totalRuntimeMs)} | Cost: ${formatMoney(metrics.totalCost)}`;
     wrapper.appendChild(summary);
 
     if (item.thought) {
@@ -338,6 +339,7 @@ function renderHistory(items) {
 
     wrapper.appendChild(createMetricsTable(metrics));
     wrapper.appendChild(createRuntimeTable([
+      { stage: 'Prep', detail: 'Overlay reset, native capture, context build', time: setupElapsedMs },
       { stage: 'Reasoner', detail: reasonerLabel, time: item.reasonerDurationMs },
       {
         stage: 'Tree Resolve',
@@ -372,6 +374,7 @@ function renderHistory(items) {
         totalAttemptMs: item.uiaElapsedMs || 0
       },
       timings: {
+        setupMs: setupElapsedMs || 0,
         reasonerMs: item.reasonerDurationMs || 0,
         treeResolveMs: item.treeResolveElapsedMs || 0,
         grokMs: item.treeLocatorElapsedMs || 0,

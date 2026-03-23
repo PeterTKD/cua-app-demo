@@ -361,10 +361,185 @@
             }
         }
     </style>
+    <style>
+        .border {
+            border-color: #3B82F6;
+            box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.18);
+        }
+
+        body.clickable .border {
+            border-color: #3B82F6;
+        }
+
+        .edge-glow {
+            box-shadow:
+                inset 0 0 0 2px rgba(59, 130, 246, 0.32),
+                inset 0 0 26px rgba(59, 130, 246, 0.26),
+                inset 0 0 72px rgba(59, 130, 246, 0.18);
+        }
+
+        .selection-ring {
+            border-color: rgba(59, 130, 246, 0.94);
+            box-shadow:
+                inset 0 0 0 1px rgba(219, 234, 254, 0.58),
+                0 0 24px rgba(59, 130, 246, 0.34),
+                0 0 70px rgba(59, 130, 246, 0.18);
+        }
+
+        body.selection-pulse:not(.loading) .edge-glow {
+            animation: selectionPulseBlue 1.5s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+        }
+
+        body.selection-pulse .border {
+            animation: selectedBorderBlue 1.5s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+        }
+
+        body.selection-pulse:not(.loading) .selection-ring {
+            animation: selectionRingBlue 1.5s cubic-bezier(0.22, 1, 0.36, 1) 1 forwards;
+        }
+
+        body.loading .edge-glow {
+            opacity: 1;
+            animation: edgePulseBlue 1.2s ease-in-out infinite;
+        }
+
+        .loading-trace {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            padding: 3px;
+            background: conic-gradient(
+                from 0deg,
+                transparent 0deg 220deg,
+                rgba(59, 130, 246, 0.08) 220deg 250deg,
+                rgba(96, 165, 250, 0.94) 250deg 300deg,
+                rgba(191, 219, 254, 0.98) 300deg 320deg,
+                rgba(59, 130, 246, 0.08) 320deg 340deg,
+                transparent 340deg 360deg
+            );
+            -webkit-mask:
+                linear-gradient(#000 0 0) content-box,
+                linear-gradient(#000 0 0);
+            -webkit-mask-composite: xor;
+            mask:
+                linear-gradient(#000 0 0) content-box,
+                linear-gradient(#000 0 0);
+            mask-composite: exclude;
+        }
+
+        body.loading .loading-trace {
+            opacity: 0;
+            animation: none;
+        }
+
+        @keyframes borderOrbit {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes edgePulseBlue {
+            0% {
+                box-shadow:
+                    inset 0 0 0 2px rgba(59, 130, 246, 0.34),
+                    inset 0 0 20px rgba(59, 130, 246, 0.24),
+                    inset 0 0 60px rgba(59, 130, 246, 0.14);
+            }
+            50% {
+                box-shadow:
+                    inset 0 0 0 3px rgba(96, 165, 250, 0.62),
+                    inset 0 0 46px rgba(59, 130, 246, 0.42),
+                    inset 0 0 118px rgba(59, 130, 246, 0.28);
+            }
+            100% {
+                box-shadow:
+                    inset 0 0 0 2px rgba(59, 130, 246, 0.34),
+                    inset 0 0 20px rgba(59, 130, 246, 0.24),
+                    inset 0 0 60px rgba(59, 130, 246, 0.14);
+            }
+        }
+
+        @keyframes selectionPulseBlue {
+            0% {
+                opacity: 0;
+                box-shadow:
+                    inset 0 0 0 1px rgba(59, 130, 246, 0.16),
+                    inset 0 0 18px rgba(59, 130, 246, 0.14),
+                    inset 0 0 42px rgba(59, 130, 246, 0.08);
+            }
+            30% {
+                opacity: 1;
+                box-shadow:
+                    inset 0 0 0 3px rgba(59, 130, 246, 0.48),
+                    inset 0 0 42px rgba(59, 130, 246, 0.34),
+                    inset 0 0 92px rgba(59, 130, 246, 0.18);
+            }
+            100% {
+                opacity: 0;
+                box-shadow:
+                    inset 0 0 0 1px rgba(59, 130, 246, 0),
+                    inset 0 0 0 rgba(59, 130, 246, 0),
+                    inset 0 0 0 rgba(59, 130, 246, 0);
+            }
+        }
+
+        @keyframes selectionRingBlue {
+            0% {
+                opacity: 0;
+                border-color: rgba(59, 130, 246, 0.24);
+                box-shadow:
+                    inset 0 0 0 1px rgba(219, 234, 254, 0.1),
+                    0 0 0 rgba(59, 130, 246, 0),
+                    0 0 0 rgba(59, 130, 246, 0);
+            }
+            24% {
+                opacity: 1;
+                border-color: rgba(59, 130, 246, 0.96);
+                box-shadow:
+                    inset 0 0 0 1px rgba(219, 234, 254, 0.55),
+                    0 0 18px rgba(59, 130, 246, 0.22),
+                    0 0 42px rgba(59, 130, 246, 0.14);
+            }
+            56% {
+                opacity: 1;
+                border-color: rgba(96, 165, 250, 1);
+                box-shadow:
+                    inset 0 0 0 1px rgba(219, 234, 254, 0.75),
+                    0 0 30px rgba(59, 130, 246, 0.34),
+                    0 0 88px rgba(59, 130, 246, 0.18);
+            }
+            100% {
+                opacity: 0;
+                border-color: rgba(59, 130, 246, 0.2);
+                box-shadow:
+                    inset 0 0 0 1px rgba(219, 234, 254, 0),
+                    0 0 0 rgba(59, 130, 246, 0),
+                    0 0 0 rgba(59, 130, 246, 0);
+            }
+        }
+
+        @keyframes selectedBorderBlue {
+            0% {
+                border-color: rgba(59, 130, 246, 0.82);
+                box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+            }
+            35% {
+                border-color: rgba(96, 165, 250, 1);
+                box-shadow:
+                    inset 0 0 0 1px rgba(147, 197, 253, 0.58),
+                    0 0 22px rgba(59, 130, 246, 0.32);
+            }
+            100% {
+                border-color: #3B82F6;
+                box-shadow: 0 0 0 rgba(59, 130, 246, 0);
+            }
+        }
+    </style>
 </head>
 <body>
     <canvas id="drawingCanvas"></canvas>
     <div class="edge-glow"></div>
+    <div class="loading-trace"></div>
     <div class="selection-ring"></div>
     <div class="border"></div>
     <div id="textOverlay" class="hidden">
