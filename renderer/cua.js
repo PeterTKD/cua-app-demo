@@ -1,7 +1,7 @@
 ﻿import { elements } from './dom.js';
 import { captureFrame } from './screen-share.js';
 import { addHistoryItem } from './history.js';
-import { extractCuaAction, hasScreenshotOnlyAction, mapImageCoordsToDisplay } from './utils.js';
+import { mapImageCoordsToDisplay } from './utils.js';
 
 const ACTION_COLORS = {
   click: '#1f2937',
@@ -53,11 +53,6 @@ function buildCalloutText(summary) {
     return 'Follow the on-screen guidance.';
   }
   return summary.replace(/\s+/g, ' ').trim();
-}
-
-function getDurationMs(response) {
-  if (!response || !response.created_at || !response.completed_at) return null;
-  return (response.completed_at - response.created_at) * 1000;
 }
 
 function isPointerAction(actionType) {
@@ -114,25 +109,6 @@ function normalizeCapturedFrame(frame) {
   };
 }
 
-async function resolveFrameDataUrl(frame) {
-  if (!frame) return null;
-  if (frame.dataUrl) {
-    return frame.dataUrl;
-  }
-  if (frame.frameId) {
-    const dataUrl = await window.electronAPI.getCapturedFrameDataUrl({
-      frameId: frame.frameId,
-      quality: 82
-    }).catch(() => null);
-    if (dataUrl) {
-      frame.dataUrl = dataUrl;
-      return dataUrl;
-    }
-    return null;
-  }
-  return frame.getDataUrl();
-}
-
 function extractReasonerJson(response) {
   if (!response) {
     throw new Error('Empty reasoner response');
@@ -159,6 +135,18 @@ function normalizeReasonerAction(action) {
   if (!action || typeof action !== 'object') return null;
   const actionType = action.action_type || action.action || null;
   if (!actionType) return null;
+  const path = Array.isArray(action.path)
+    ? action.path
+      .map((point) => ({
+        x: Number(point?.x),
+        y: Number(point?.y)
+      }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    : [];
+  const keys = Array.isArray(action.keys)
+    ? action.keys.map((key) => String(key).trim()).filter(Boolean)
+    : null;
+  const waitMs = Number.isFinite(action.wait_ms) ? Number(action.wait_ms) : null;
   const rawUiaTarget = UIA_SUPPORTED_ACTIONS.has(actionType) && Object.prototype.hasOwnProperty.call(action, 'uia_target')
     ? action.uia_target
     : null;
@@ -167,9 +155,60 @@ function normalizeReasonerAction(action) {
     action: actionType,
     action_type: actionType,
     action_callout: action.action_callout || action['action-callout'] || null,
+    path,
+    keys,
+    wait_ms: waitMs,
     target_description: action.target_description || '',
     uia_target: normalizeUiaTarget(rawUiaTarget)
   };
+}
+
+function buildReasonerResolvedAction(call) {
+  if (!call || typeof call !== 'object') return null;
+
+  const actionType = call.action_type || call.action || null;
+  if (!actionType) return null;
+
+  const resolved = {
+    type: actionType,
+    source: 'reasoner',
+    executor: 'reasoner',
+    coordinateSpace: 'reasoner'
+  };
+
+  const path = Array.isArray(call.path)
+    ? call.path
+      .map((point) => ({
+        x: Number(point?.x),
+        y: Number(point?.y)
+      }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    : [];
+
+  if (actionType === 'drag') {
+    if (path.length > 0) {
+      resolved.path = path;
+    }
+  } else if (path.length > 0) {
+    resolved.x = path[0].x;
+    resolved.y = path[0].y;
+  }
+
+  if (actionType === 'keypress') {
+    const keys = Array.isArray(call.keys)
+      ? call.keys.map((key) => String(key).trim()).filter(Boolean)
+      : [];
+    resolved.keys = keys;
+    if (keys.length === 1) {
+      resolved.key = keys[0];
+    }
+  }
+
+  if (actionType === 'wait' && Number.isFinite(call.wait_ms)) {
+    resolved.wait_ms = Number(call.wait_ms);
+  }
+
+  return resolved;
 }
 
 function normalizeUiaTarget(target) {
@@ -384,27 +423,6 @@ async function waitForFreshVideoFrame(timeoutMs = 600) {
   await new Promise((resolve) => setTimeout(resolve, Math.min(200, timeoutMs)));
 }
 
-async function runCuaInstruction({ call, frame, strict }) {
-  const cuaAction = call.action_type === 'pinpoint' ? 'click' : call.action_type;
-  const promptQuestion = `Action: ${cuaAction}\nInstruction: ${call.target_description}`;
-  const startedAt = Date.now();
-  const imageDataUrl = await resolveFrameDataUrl(frame);
-  const cuaResponse = await window.electronAPI.runCuaQuestion({
-    question: promptQuestion,
-    imageDataUrl,
-    frameId: frame.frameId || null,
-    displayWidth: frame.width,
-    displayHeight: frame.height,
-    strict
-  });
-  const cuaDurationMs = Date.now() - startedAt;
-  const { action, summary } = extractCuaAction(cuaResponse);
-  if (hasScreenshotOnlyAction(action) && !strict) {
-    return runCuaInstruction({ call, frame, strict: true });
-  }
-  return { cuaResponse, action, summary, cuaDurationMs };
-}
-
 async function runTreeInstruction({ call, frame, treePrefetchIdPromise }) {
   const locatorAction = await buildTreeLocatorAction(call, frame);
   const prefetchId = treePrefetchIdPromise ? await treePrefetchIdPromise : null;
@@ -459,6 +477,18 @@ async function runTreeInstruction({ call, frame, treePrefetchIdPromise }) {
 }
 
 async function runGuidanceInstruction({ call, frame, treePrefetchIdPromise }) {
+  const directAction = buildReasonerResolvedAction(call);
+  const directResult = {
+    action: directAction,
+    summary: call?.action_callout || null,
+    kind: 'reasoner',
+    uiaAttempted: false,
+    uiaSucceeded: false,
+    uiaFailureReason: null,
+    uiaElapsedMs: 0,
+    treeResolveDurationMs: 0
+  };
+
   if (call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type)) {
     const uiaStartedAt = Date.now();
     try {
@@ -473,22 +503,18 @@ async function runGuidanceInstruction({ call, frame, treePrefetchIdPromise }) {
           uiaElapsedMs: Date.now() - uiaStartedAt
         };
       }
-      const cuaResult = await runCuaInstruction({ call, frame, strict: false });
       return {
         ...treeResult,
-        ...cuaResult,
-        kind: 'cua',
+        ...directResult,
         uiaAttempted: true,
         uiaSucceeded: false,
         uiaFailureReason: treeResult?.failureReason || 'not_found',
         uiaElapsedMs: Date.now() - uiaStartedAt
       };
     } catch (error) {
-      console.warn('Tree locator fallback to CUA:', error?.message || error);
-      const cuaResult = await runCuaInstruction({ call, frame, strict: false });
+      console.warn('Tree locator fallback to reasoner pointer:', error?.message || error);
       return {
-        ...cuaResult,
-        kind: 'cua',
+        ...directResult,
         uiaAttempted: true,
         uiaSucceeded: false,
         uiaFailureReason: error?.message || String(error),
@@ -501,15 +527,8 @@ async function runGuidanceInstruction({ call, frame, treePrefetchIdPromise }) {
     }
   }
 
-  const cuaResult = await runCuaInstruction({ call, frame, strict: false });
   return {
-    ...cuaResult,
-    kind: 'cua',
-    uiaAttempted: false,
-    uiaSucceeded: false,
-    uiaFailureReason: null,
-    uiaElapsedMs: 0,
-    treeResolveDurationMs: 0
+    ...directResult
   };
 }
 
@@ -561,31 +580,18 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
       allowClickThrough: true
     };
     pendingAction = false;
-    return { action: null, summary: fallbackText, hasPointer: false, actionType: 'callout', executor: 'cua' };
+    return { action: null, summary: fallbackText, hasPointer: false, actionType: 'callout', executor: 'reasoner' };
   }
 
   const displayInfo = await window.electronAPI.getSharedDisplayBounds();
   if (!displayInfo || !displayInfo.bounds) {
-    throw new Error('Select a screen before running CUA.');
+    throw new Error('Select a screen before showing guidance.');
   }
   const scaleFactor = displayInfo.scaleFactor || 1;
   const physicalBounds = displayInfo.physicalBounds || {
     x: displayInfo.bounds.x * scaleFactor,
     y: displayInfo.bounds.y * scaleFactor
   };
-
-  const mapped = mapImageCoordsToDisplay(
-    { x: startPoint.x, y: startPoint.y },
-    { width: frame.width, height: frame.height },
-    displayInfo
-  );
-
-  const absX = mapped.absX;
-  const absY = mapped.absY;
-  const dipX = Math.round((absX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
-  const dipY = Math.round((absY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y);
-  const localX = Math.round(dipX - displayInfo.bounds.x);
-  const localY = Math.round(dipY - displayInfo.bounds.y);
 
   const normalizedActionType = actionTypeName || 'click';
   const heading = normalizedActionType === 'double_click' ? 'Double click'
@@ -609,6 +615,30 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
     }
   }
 
+  const coordinateImageSize = action?.coordinateSpace === 'reasoner'
+    ? {
+        width: frame.reasonerWidth || frame.width,
+        height: frame.reasonerHeight || frame.height
+      }
+    : {
+        width: frame.width,
+        height: frame.height
+      };
+  const hasAnchorPoint = typeof startPoint.x === 'number' && typeof startPoint.y === 'number';
+  const mapped = hasAnchorPoint
+    ? mapImageCoordsToDisplay(
+        { x: startPoint.x, y: startPoint.y },
+        coordinateImageSize,
+        displayInfo
+      )
+    : null;
+  const absX = mapped ? mapped.absX : null;
+  const absY = mapped ? mapped.absY : null;
+  const dipX = mapped ? Math.round((absX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x) : -1;
+  const dipY = mapped ? Math.round((absY - physicalBounds.y) / scaleFactor + displayInfo.bounds.y) : -1;
+  const localX = dipX >= 0 ? Math.round(dipX - displayInfo.bounds.x) : -1;
+  const localY = dipY >= 0 ? Math.round(dipY - displayInfo.bounds.y) : -1;
+
   let endDipX = -1;
   let endDipY = -1;
   let endLocalX = -1;
@@ -617,7 +647,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
     if (typeof endPoint?.x === 'number' && typeof endPoint?.y === 'number') {
       const { absX: endAbsX, absY: endAbsY } = mapImageCoordsToDisplay(
         { x: endPoint.x, y: endPoint.y },
-        { width: frame.width, height: frame.height },
+        coordinateImageSize,
         displayInfo
       );
       endDipX = Math.round((endAbsX - physicalBounds.x) / scaleFactor + displayInfo.bounds.x);
@@ -657,8 +687,8 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
     allowClickThrough: true
   };
 
-  const physicalX = Math.round(absX);
-  const physicalY = Math.round(absY);
+  const physicalX = Number.isFinite(absX) ? Math.round(absX) : null;
+  const physicalY = Number.isFinite(absY) ? Math.round(absY) : null;
 
   // Start element detection immediately in parallel (optimization #9)
   let elementDetectionPromise = null;
@@ -668,7 +698,7 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
 
   currentAction = {
     type: normalizedActionType,
-    source: 'cua',
+    source: action?.source || 'reasoner',
     x: physicalX,
     y: physicalY,
     dipX,
@@ -713,7 +743,14 @@ async function presentCuaAction({ action, summary, frame, actionTypeOverride, ca
   }
 
   const hasPointer = ['click', 'double_click', 'drag', 'pinpoint'].includes(normalizedActionType);
-  return { action, summary: resolvedBody, element: null, hasPointer, actionType: normalizedActionType, executor: 'cua' };
+  return {
+    action,
+    summary: resolvedBody,
+    element: null,
+    hasPointer,
+    actionType: normalizedActionType,
+    executor: action?.executor || action?.source || 'reasoner'
+  };
 }
 
 async function presentTreeAction({ match, summary, actionTypeOverride, calloutText, calloutType }) {
@@ -753,7 +790,7 @@ async function presentTreeAction({ match, summary, actionTypeOverride, calloutTe
       allowClickThrough: true
     };
     pendingAction = false;
-    return { action: null, summary, hasPointer: false, actionType: 'callout', executor: 'cua' };
+    return { action: null, summary, hasPointer: false, actionType: 'callout', executor: 'uia' };
   }
 
   const displayInfo = await window.electronAPI.getSharedDisplayBounds();
@@ -942,7 +979,7 @@ export async function runCuaQuestion(question, options = {}) {
           primaryAction: plannedCalls[0]?.action_type || null
         });
       } catch (_) {
-        // Keep the CUA flow resilient even if UI callback fails.
+        // Keep the guidance flow resilient even if UI callback fails.
       }
     }
 
@@ -1043,14 +1080,6 @@ export async function runCuaQuestion(question, options = {}) {
           } else if (!uiaFailureReason && item.uiaFailureReason) {
             uiaFailureReason = String(item.uiaFailureReason);
           }
-        }
-        if (item?.cuaResponse) {
-          const cuaDuration = Number(item.cuaDurationMs) || 0;
-          cuaElapsedMs += cuaDuration;
-          cuaResponses.push({
-            response: item.cuaResponse,
-            durationMs: cuaDuration || getDurationMs(item.cuaResponse)
-          });
         }
       });
 

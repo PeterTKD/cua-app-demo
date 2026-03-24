@@ -3,7 +3,7 @@ const path = require('path');
 const { getApiKey, getProviderApiKey } = require('./api-keys');
 const { buildAnthropicPayload, normalizeAnthropicResult } = require('./anthropic-client');
 
-const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.2', 'reasoner.txt');
+const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.3', 'reasoner.txt');
 
 const MODELS = [
   // OpenAI Responses API
@@ -62,6 +62,128 @@ function resolveApiKey(config) {
 
 function buildFullSystemPrompt() {
   return loadReasonerPrompt();
+}
+
+function buildReasonerStructuredOutputSchema() {
+  return {
+    type: 'object',
+    properties: {
+      thought: {
+        type: ['string', 'null'],
+        description: 'Optional internal observation for future context. Null for simple cases.'
+      },
+      answer: {
+        type: 'string',
+        description: 'Short user-facing response. Keep it concise and suitable for TTS.'
+      },
+      actions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            action_type: {
+              type: 'string',
+              enum: [
+                'click',
+                'double_click',
+                'drag',
+                'scroll',
+                'scroll_up',
+                'scroll_down',
+                'keypress',
+                'type',
+                'wait',
+                'pinpoint'
+              ]
+            },
+            action_callout: {
+              type: 'string',
+              description: 'Short overlay instruction, maximum 2-3 sentences.'
+            },
+            path: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  x: { type: 'number' },
+                  y: { type: 'number' }
+                },
+                required: ['x', 'y'],
+                additionalProperties: false
+              },
+              description: 'For vision-grounded actions. Drag should have two points. Keypress and wait should use an empty array.'
+            },
+            keys: {
+              anyOf: [
+                {
+                  type: 'array',
+                  items: { type: 'string' }
+                },
+                { type: 'null' }
+              ],
+              description: 'Used only for action_type="keypress". Otherwise null.'
+            },
+            wait_ms: {
+              type: ['number', 'null'],
+              description: 'Used only for action_type="wait". Otherwise null.'
+            },
+            uia_target: {
+              anyOf: [
+                {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string' },
+                    control_type: { type: 'string' },
+                    interactivity: { type: 'boolean' },
+                    must_include_tokens: {
+                      type: 'array',
+                      items: { type: 'string' }
+                    },
+                    must_exclude_tokens: {
+                      type: 'array',
+                      items: { type: 'string' }
+                    },
+                    position_hint: { type: 'string' },
+                    position_index: { type: ['number', 'null'] },
+                    ancestor_hint: { type: ['string', 'null'] },
+                    siblings_hint: { type: ['string', 'null'] },
+                    approx_x: { type: 'number' },
+                    approx_y: { type: 'number' }
+                  },
+                  required: [
+                    'name',
+                    'control_type',
+                    'interactivity',
+                    'must_include_tokens',
+                    'must_exclude_tokens',
+                    'position_hint',
+                    'position_index',
+                    'ancestor_hint',
+                    'siblings_hint',
+                    'approx_x',
+                    'approx_y'
+                  ],
+                  additionalProperties: false
+                },
+                { type: 'null' }
+              ]
+            }
+          },
+          required: [
+            'action_type',
+            'action_callout',
+            'path',
+            'keys',
+            'wait_ms',
+            'uia_target'
+          ],
+          additionalProperties: false
+        }
+      }
+    },
+    required: ['thought', 'answer', 'actions'],
+    additionalProperties: false
+  };
 }
 
 function buildReasonerDeveloperText(context) {
@@ -188,6 +310,14 @@ function buildOpenAIResponsesPayload(config, fullSystemPrompt, developerText, co
     model: config.id,
     instructions: fullSystemPrompt,
     input,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'guidy_screen_reasoner',
+        strict: true,
+        schema: buildReasonerStructuredOutputSchema()
+      }
+    },
     truncation: 'auto'
   };
 

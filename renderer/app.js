@@ -320,7 +320,7 @@ async function handleAsk(options = {}) {
       await ensureVideoReady();
       await waitForDisplayBounds();
     }
-    setStatus(activeMode === APP_MODES.GUIDE ? 'Analyzing screen...' : 'Sending question to CUA...', 'default');
+    setStatus(activeMode === APP_MODES.GUIDE ? 'Analyzing screen...' : 'Sending question to the reasoner...', 'default');
     appState.isRunningCua = true;
     if (question) {
       appState.lastQuestion = question;
@@ -381,10 +381,14 @@ async function handleAsk(options = {}) {
       }
     }
     if (result && result.actionType === 'wait') {
+      const requestedWaitMs = Number(result?.reasoner?.actions?.[0]?.wait_ms);
+      const waitDelayMs = Number.isFinite(requestedWaitMs) && requestedWaitMs > 0
+        ? requestedWaitMs
+        : (appState.appMode === APP_MODES.GUIDE ? 300 : 2000);
       setStatus('Waiting...', 'default');
       setTimeout(() => {
         completeStep('Wait complete.');
-      }, appState.appMode === APP_MODES.GUIDE ? 300 : 2000);
+      }, waitDelayMs);
       return;
     }
     if (result && result.actionType === 'callout') {
@@ -418,14 +422,14 @@ async function handleAsk(options = {}) {
         }, delayMs);
       }
     } else {
-      setStatus('CUA returned a pointer. UIA highlight updated.', 'success');
+      setStatus('Pointer ready.', 'success');
     }
   } catch (error) {
     if (activeMode === APP_MODES.GUIDE) {
       setGuideProcessActive(false);
     }
-    setStatus(error.message || 'Failed to run CUA.', 'error');
-    addChatMessage(error.message || 'Failed to run CUA.', 'assistant');
+    setStatus(error.message || 'Failed to run guidance.', 'error');
+    addChatMessage(error.message || 'Failed to run guidance.', 'assistant');
   } finally {
     appState.isRunningCua = false;
     if (elements.ttsToggleButton) elements.ttsToggleButton.disabled = false;
