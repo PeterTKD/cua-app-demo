@@ -89,7 +89,7 @@ Return exactly one JSON object in this shape:
       "action_callout": string, // When having an action always add call out text for this action. Maximum 2-3 senteces guiding or explaining to users what they should do.
       "x": number,
       "y": number,
-      "keypress_text": string | null,
+      "keys": [string] | null,
       "wait_ms": string | null,
       "uia_target": // When you decide to use the UIA fill up this parameter
         {
