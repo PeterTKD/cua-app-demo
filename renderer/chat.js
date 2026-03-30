@@ -367,7 +367,9 @@ export function addChatMessage(message, role, meta = {}) {
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${role === 'user' ? 'user' : 'assistant regular-assistant'}`;
   if (role === 'user') {
-    bubble.textContent = message;
+    const stream = createMessageStream();
+    stream.textContent = message;
+    bubble.appendChild(stream);
   } else {
     bubble.innerHTML = renderMarkdown(message);
   }

@@ -50,10 +50,11 @@ export function requestWidgetResize() {
   }
   appState.resizeRaf = requestAnimationFrame(() => {
     appState.resizeRaf = null;
-    const padding = 48;
+    const horizontalPadding = 48;
+    const verticalPadding = 32;
     const isFocus = elements.widget.classList.contains('guide-process-active');
     const targetWidth = isFocus ? FOCUS_WIDTH : CHAT_WIDTH;
-    const contentWidth = Math.max(targetWidth, Math.ceil(elements.widget.scrollWidth + padding));
+    const contentWidth = Math.max(targetWidth, Math.ceil(elements.widget.scrollWidth + horizontalPadding));
     const currentWidth = Math.ceil(elements.widget.getBoundingClientRect().width || 0);
     const width = isFocus ? Math.max(contentWidth, currentWidth) : contentWidth;
     const contentHeight = Math.max(
@@ -61,7 +62,7 @@ export function requestWidgetResize() {
       elements.widget.scrollHeight,
       elements.widget.offsetHeight
     );
-    const height = Math.ceil(contentHeight + padding);
+    const height = Math.ceil(contentHeight + verticalPadding);
     window.electronAPI.resizeWidget({ width, height });
   });
 }

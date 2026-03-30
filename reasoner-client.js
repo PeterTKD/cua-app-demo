@@ -3,7 +3,7 @@ const path = require('path');
 const { getApiKey, getProviderApiKey } = require('./api-keys');
 const { buildAnthropicPayload, normalizeAnthropicResult } = require('./anthropic-client');
 
-const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.3', 'reasoner.txt');
+const REASONER_PROMPT_PATH = process.env.REASONER_PROMPT_PATH || path.join(__dirname, 'prompts', 'v1.0.3', 'reasoner3.txt');
 
 const MODELS = [
   // OpenAI Responses API
@@ -100,18 +100,19 @@ function buildReasonerStructuredOutputSchema() {
               type: 'string',
               description: 'Short overlay instruction, maximum 2-3 sentences.'
             },
-            path: {
+            target_descriptions: {
               type: 'array',
               items: {
-                type: 'object',
-                properties: {
-                  x: { type: 'number' },
-                  y: { type: 'number' }
-                },
-                required: ['x', 'y'],
-                additionalProperties: false
+                type: 'string'
               },
-              description: 'For vision-grounded actions. Drag should have two points. Keypress and wait should use an empty array.'
+              description: 'One or more plain target descriptions for CUA 5.4. Drag uses two descriptions. Keypress and wait use an empty array.'
+            },
+            text: {
+              anyOf: [
+                { type: 'string' },
+                { type: 'null' }
+              ],
+              description: 'Used only for action_type="type". Otherwise null.'
             },
             keys: {
               anyOf: [
@@ -126,56 +127,15 @@ function buildReasonerStructuredOutputSchema() {
             wait_ms: {
               type: ['number', 'null'],
               description: 'Used only for action_type="wait". Otherwise null.'
-            },
-            uia_target: {
-              anyOf: [
-                {
-                  type: 'object',
-                  properties: {
-                    name: { type: 'string' },
-                    control_type: { type: 'string' },
-                    interactivity: { type: 'boolean' },
-                    must_include_tokens: {
-                      type: 'array',
-                      items: { type: 'string' }
-                    },
-                    must_exclude_tokens: {
-                      type: 'array',
-                      items: { type: 'string' }
-                    },
-                    position_hint: { type: 'string' },
-                    position_index: { type: ['number', 'null'] },
-                    ancestor_hint: { type: ['string', 'null'] },
-                    siblings_hint: { type: ['string', 'null'] },
-                    approx_x: { type: 'number' },
-                    approx_y: { type: 'number' }
-                  },
-                  required: [
-                    'name',
-                    'control_type',
-                    'interactivity',
-                    'must_include_tokens',
-                    'must_exclude_tokens',
-                    'position_hint',
-                    'position_index',
-                    'ancestor_hint',
-                    'siblings_hint',
-                    'approx_x',
-                    'approx_y'
-                  ],
-                  additionalProperties: false
-                },
-                { type: 'null' }
-              ]
             }
           },
           required: [
             'action_type',
             'action_callout',
-            'path',
+            'target_descriptions',
+            'text',
             'keys',
-            'wait_ms',
-            'uia_target'
+            'wait_ms'
           ],
           additionalProperties: false
         }

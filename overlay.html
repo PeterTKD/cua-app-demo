@@ -152,7 +152,10 @@
             box-shadow: var(--widget-shadow);
             border: 2px solid #f59e0b;
             display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
             gap: 10px;
+            max-height: 40vh;
+            overflow: hidden;
         }
 
         #calloutHeader {
@@ -164,6 +167,9 @@
         #calloutBody {
             color: #e2e8f0;
             font-size: 15px;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 6px;
         }
 
         .keycaps {

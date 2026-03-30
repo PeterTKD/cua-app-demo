@@ -37,6 +37,7 @@ let lastCalloutPayload = null;
 let lastReasonerThought = null;
 const DISCREPANCY_RETRY_LIMIT = 1;
 const UIA_SUPPORTED_ACTIONS = new Set(['click', 'double_click', 'pinpoint', 'type']);
+const CUA54_POINTER_ACTIONS = new Set(['click', 'double_click', 'drag', 'scroll', 'scroll_up', 'scroll_down', 'pinpoint', 'type']);
 
 function pushConversation(role, text) {
   if (!text) return;
@@ -143,27 +144,31 @@ function normalizeReasonerAction(action) {
       }))
       .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
     : [];
+  const targetDescriptions = Array.isArray(action.target_descriptions)
+    ? action.target_descriptions.map((entry) => String(entry).trim()).filter(Boolean)
+    : typeof action.target_description === 'string' && action.target_description.trim()
+      ? [action.target_description.trim()]
+      : [];
+  const text = typeof action.text === 'string' ? action.text : null;
   const keys = Array.isArray(action.keys)
     ? action.keys.map((key) => String(key).trim()).filter(Boolean)
     : null;
   const waitMs = Number.isFinite(action.wait_ms) ? Number(action.wait_ms) : null;
-  const rawUiaTarget = UIA_SUPPORTED_ACTIONS.has(actionType) && Object.prototype.hasOwnProperty.call(action, 'uia_target')
-    ? action.uia_target
-    : null;
   return {
     ...action,
     action: actionType,
     action_type: actionType,
     action_callout: action.action_callout || action['action-callout'] || null,
     path,
+    target_descriptions: targetDescriptions,
+    text,
     keys,
     wait_ms: waitMs,
-    target_description: action.target_description || '',
-    uia_target: normalizeUiaTarget(rawUiaTarget)
+    target_description: targetDescriptions[0] || action.target_description || ''
   };
 }
 
-function buildReasonerResolvedAction(call) {
+function buildReasonerResolvedAction(call, resolvedPoints = []) {
   if (!call || typeof call !== 'object') return null;
 
   const actionType = call.action_type || call.action || null;
@@ -172,11 +177,18 @@ function buildReasonerResolvedAction(call) {
   const resolved = {
     type: actionType,
     source: 'reasoner',
-    executor: 'reasoner',
-    coordinateSpace: 'reasoner'
+    executor: resolvedPoints.length > 0 ? 'cua-5.4' : 'reasoner',
+    coordinateSpace: 'original'
   };
 
-  const path = Array.isArray(call.path)
+  const path = Array.isArray(resolvedPoints) && resolvedPoints.length > 0
+    ? resolvedPoints
+      .map((point) => ({
+        x: Number(point?.x),
+        y: Number(point?.y)
+      }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    : Array.isArray(call.path)
     ? call.path
       .map((point) => ({
         x: Number(point?.x),
@@ -209,6 +221,53 @@ function buildReasonerResolvedAction(call) {
   }
 
   return resolved;
+}
+
+function normalizeCua54Points(result) {
+  const points = Array.isArray(result?.points) ? result.points : [];
+  return points
+    .map((point) => ({
+      x: Number(point?.x),
+      y: Number(point?.y)
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+}
+
+function buildCua54ReasonerInput(description) {
+  return String(description || '').trim();
+}
+
+async function resolveCua54Point({ description, frame }) {
+  const reasonerInput = buildCua54ReasonerInput(description);
+  if (!reasonerInput) {
+    throw new Error('Missing target description for CUA 5.4');
+  }
+
+  const startedAt = Date.now();
+  const response = await window.electronAPI.runCua54Question({
+    reasonerInput,
+    frameId: frame?.frameId || null,
+    imageDataUrl: frame?.getDataUrl?.() || frame?.reasonerDataUrl || null,
+    screenDimensions: {
+      width: frame?.reasonerWidth || frame?.width || 0,
+      height: frame?.reasonerHeight || frame?.height || 0
+    },
+    originalScreenDimensions: {
+      width: frame?.width || frame?.reasonerWidth || 0,
+      height: frame?.height || frame?.reasonerHeight || 0
+    }
+  });
+
+  const parsed = extractReasonerJson(response);
+  const points = normalizeCua54Points(parsed);
+  if (points.length === 0) {
+    throw new Error(`CUA 5.4 returned no points for target: ${reasonerInput}`);
+  }
+  return {
+    point: points[0],
+    response,
+    durationMs: Date.now() - startedAt
+  };
 }
 
 function normalizeUiaTarget(target) {
@@ -476,59 +535,51 @@ async function runTreeInstruction({ call, frame, treePrefetchIdPromise }) {
   };
 }
 
-async function runGuidanceInstruction({ call, frame, treePrefetchIdPromise }) {
-  const directAction = buildReasonerResolvedAction(call);
-  const directResult = {
-    action: directAction,
+async function runGuidanceInstruction({ call, frame }) {
+  const actionType = call?.action_type || call?.action || null;
+  const descriptions = Array.isArray(call?.target_descriptions) && call.target_descriptions.length > 0
+    ? call.target_descriptions
+    : call?.target_description
+      ? [call.target_description]
+      : [];
+
+  let resolvedPoints = [];
+  const cuaResponses = [];
+  let cuaElapsedMs = 0;
+  if (CUA54_POINTER_ACTIONS.has(actionType)) {
+    if (actionType === 'drag') {
+      const startDescription = descriptions[0] || call?.action_callout || '';
+      const endDescription = descriptions[1] || descriptions[0] || call?.action_callout || '';
+      const [startResult, endResult] = await Promise.all([
+        resolveCua54Point({ description: startDescription, frame }),
+        resolveCua54Point({ description: endDescription, frame })
+      ]);
+      resolvedPoints = [startResult.point, endResult.point];
+      cuaResponses.push(
+        { response: startResult.response, durationMs: startResult.durationMs },
+        { response: endResult.response, durationMs: endResult.durationMs }
+      );
+      cuaElapsedMs += startResult.durationMs + endResult.durationMs;
+    } else {
+      const description = descriptions[0] || call?.action_callout || '';
+      const cuaResult = await resolveCua54Point({ description, frame });
+      resolvedPoints = [cuaResult.point];
+      cuaResponses.push({ response: cuaResult.response, durationMs: cuaResult.durationMs });
+      cuaElapsedMs += cuaResult.durationMs;
+    }
+  }
+
+  return {
+    action: buildReasonerResolvedAction(call, resolvedPoints),
     summary: call?.action_callout || null,
     kind: 'reasoner',
+    cuaResponses,
+    cuaElapsedMs,
     uiaAttempted: false,
     uiaSucceeded: false,
     uiaFailureReason: null,
     uiaElapsedMs: 0,
     treeResolveDurationMs: 0
-  };
-
-  if (call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type)) {
-    const uiaStartedAt = Date.now();
-    try {
-      const treeResult = await runTreeInstruction({ call, frame, treePrefetchIdPromise });
-      if (treeResult?.match) {
-        return {
-          ...treeResult,
-          kind: 'tree',
-          uiaAttempted: true,
-          uiaSucceeded: true,
-          uiaFailureReason: null,
-          uiaElapsedMs: Date.now() - uiaStartedAt
-        };
-      }
-      return {
-        ...treeResult,
-        ...directResult,
-        uiaAttempted: true,
-        uiaSucceeded: false,
-        uiaFailureReason: treeResult?.failureReason || 'not_found',
-        uiaElapsedMs: Date.now() - uiaStartedAt
-      };
-    } catch (error) {
-      console.warn('Tree locator fallback to reasoner pointer:', error?.message || error);
-      return {
-        ...directResult,
-        uiaAttempted: true,
-        uiaSucceeded: false,
-        uiaFailureReason: error?.message || String(error),
-        uiaElapsedMs: Date.now() - uiaStartedAt,
-        treeDurationMs: 0,
-        treeResolveDurationMs: 0,
-        treeMeta: null,
-        treeResponse: null
-      };
-    }
-  }
-
-  return {
-    ...directResult
   };
 }
 
@@ -885,9 +936,9 @@ export async function runCuaQuestion(question, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
     }
     frame = normalizeCapturedFrame(await window.electronAPI.captureRunFrame({
-      includeFull: false,
+      includeFull: true,
       cacheFull: true,
-      maxDimension: 1280
+      maxDimension: 0
     }).catch(() => null));
     if (!frame) {
       await waitForFreshVideoFrame();
@@ -897,9 +948,6 @@ export async function runCuaQuestion(question, options = {}) {
     if (!frame) {
       throw new Error('Failed to capture screen frame.');
     }
-
-    // Start tree acquisition as early as possible so it can overlap with the reasoner.
-    const treePrefetchIdPromise = window.electronAPI.startTreePrefetch().catch(() => null);
 
     if (question && options.skipUserMessage !== true) {
       pushConversation('user', question);
@@ -1029,12 +1077,10 @@ export async function runCuaQuestion(question, options = {}) {
       }
     } else {
       const filteredCalls = cuaCalls;
-      const needsTreePrefetch = filteredCalls.some((call) => call?.uia_target && UIA_SUPPORTED_ACTIONS.has(call.action_type));
-      const sharedTreePrefetchIdPromise = needsTreePrefetch ? treePrefetchIdPromise : null;
 
       const executorStart = Date.now();
       const guidanceResults = await Promise.all(
-        filteredCalls.map((call) => runGuidanceInstruction({ call, frame, treePrefetchIdPromise: sharedTreePrefetchIdPromise }))
+        filteredCalls.map((call) => runGuidanceInstruction({ call, frame }))
       );
       executorElapsedMs = Date.now() - executorStart;
 
@@ -1058,6 +1104,10 @@ export async function runCuaQuestion(question, options = {}) {
       }
 
       guidanceResults.forEach((item) => {
+        if (Array.isArray(item?.cuaResponses) && item.cuaResponses.length > 0) {
+          cuaResponses.push(...item.cuaResponses);
+          cuaElapsedMs += Number(item.cuaElapsedMs) || 0;
+        }
         if (item?.treeResponse || item?.treeMeta || item?.treeDurationMs) {
           const treeDuration = Number(item.treeDurationMs) || 0;
           treeLocatorElapsedMs += treeDuration;
@@ -1087,22 +1137,14 @@ export async function runCuaQuestion(question, options = {}) {
       const primaryCall = filteredCalls[0];
       if (primary) {
         const actionCalloutText = primaryCall.action_callout || (reasonerJson.callout ? reasonerJson.callout.text : null);
-        result = primary.kind === 'tree'
-          ? await presentTreeAction({
-              match: primary.match,
-              summary: primary.summary,
-              actionTypeOverride: primaryCall.action_type,
-              calloutText: actionCalloutText,
-              calloutType: reasonerJson.callout ? reasonerJson.callout.type : null
-            })
-          : await presentCuaAction({
-              action: primary.action,
-              summary: primary.summary,
-              frame,
-              actionTypeOverride: primaryCall.action_type,
-              calloutText: actionCalloutText,
-              calloutType: reasonerJson.callout ? reasonerJson.callout.type : null
-            });
+        result = await presentCuaAction({
+          action: primary.action,
+          summary: primary.summary,
+          frame,
+          actionTypeOverride: primaryCall.action_type,
+          calloutText: actionCalloutText,
+          calloutType: reasonerJson.callout ? reasonerJson.callout.type : null
+        });
       }
 
       if (guidanceResults.length > 1) {

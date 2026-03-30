@@ -18,6 +18,7 @@
             margin: 0;
             background: transparent;
             font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+            overflow: hidden;
         }
 
         .callout {
@@ -33,7 +34,10 @@
             border: 2px solid #f59e0b;
             box-shadow: var(--widget-shadow);
             display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto auto;
             gap: 10px;
+            max-height: 100vh;
+            overflow: hidden;
             transition: opacity 0.2s ease, transform 0.2s ease;
         }
 
@@ -59,6 +63,9 @@
             font-size: 15px;
             color: #e2e8f0;
             word-break: break-word;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 6px;
         }
 
         .keycaps {

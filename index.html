@@ -32,17 +32,17 @@
         }
 
         body {
-            padding: 24px;
+            padding: 16px;
             height: 100%;
         }
 
         .assistant-widget {
             position: relative;
-            width: min(420px, 92vw);
+            width: min(680px, 92vw);
             display: flex;
             flex-direction: column;
             gap: 10px;
-            padding: 14px 16px 12px;
+            padding: 12px 16px 10px;
             border-radius: 18px;
             background: var(--panel);
             color: #f9fafb;
@@ -153,7 +153,7 @@
             flex-direction: column;
             gap: 8px;
             padding: 2px 4px;
-            max-height: 380px;
+            max-height: 240px;
             overflow-y: auto;
             -webkit-app-region: no-drag;
             scrollbar-width: none;
@@ -619,7 +619,7 @@
             flex-wrap: nowrap;
             gap: 20px;
             padding: 20px 18px 22px;
-            max-height: 760px;
+            max-height: 240px;
             background: linear-gradient(180deg, rgba(3, 7, 16, 0.18) 0%, rgba(3, 7, 16, 0.48) 100%);
             backdrop-filter: blur(24px) saturate(140%);
             -webkit-backdrop-filter: blur(24px) saturate(140%);
@@ -630,7 +630,7 @@
         }
 
         .widget-footer {
-            padding: 0 18px 18px;
+            padding: 0 18px 12px;
             background: linear-gradient(180deg, rgba(3, 7, 16, 0.18) 0%, rgba(3, 7, 16, 0.48) 100%);
             backdrop-filter: blur(24px) saturate(140%);
             -webkit-backdrop-filter: blur(24px) saturate(140%);
@@ -645,6 +645,8 @@
 
         .chat-bubble.user {
             align-self: flex-end;
+            margin-left: auto;
+            width: fit-content;
             max-width: 92%;
             padding: 14px 18px;
             border-radius: 24px;
@@ -653,9 +655,14 @@
             font-size: 15px;
             line-height: 1.72;
             box-shadow: 0 18px 34px rgba(59, 130, 246, 0.24);
+        }
+
+        .chat-bubble.user .message-stream {
+            display: block;
+            color: inherit;
             white-space: pre-wrap;
             overflow-wrap: break-word;
-            word-break: break-word;
+            word-break: normal;
         }
 
         .chat-bubble.assistant {
@@ -1009,7 +1016,7 @@
             }
 
             .chat-bubble.user {
-                max-width: min(62%, 220px);
+                max-width: 88%;
             }
 
             .task-completed-title {
@@ -1024,7 +1031,7 @@
             <div>
                 <div class="header-title">
                     <span class="live-dot" aria-hidden="true"></span>
-                    Guidy-Hybrid-v5
+                    Guidy-4.5-as-CUA
                     <span class="mode-chip" id="modeBadge">Focus</span>
                 </div>
                 <div class="header-subtitle" id="statusText">Watching: Screen share</div>

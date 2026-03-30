@@ -3,8 +3,8 @@ export const APP_MODES = {
   CHAT: 'chat'
 };
 
-export const CHAT_WIDTH = 420;
-export const FOCUS_WIDTH = 420;
+export const CHAT_WIDTH = 680;
+export const FOCUS_WIDTH = 540;
 export const POSITION_TOLERANCE = 20;
 export const DOUBLE_CLICK_WINDOW_MS = 550;
 

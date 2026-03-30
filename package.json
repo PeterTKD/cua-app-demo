@@ -16,14 +16,14 @@
   "license": "MIT",
   "build": {
     "appId": "com.electron.screenshare",
-    "productName": "Guidy-Hybrid-v5",
-    "artifactName": "Guidy-Hybrid-v5.${ext}",
+    "productName": "Guidy-4.5-as-CUA",
+    "artifactName": "Guidy-4.5-as-CUA.${ext}",
     "win": {
       "target": [
         "nsis"
       ],
       "icon": "build/icon.ico",
-      "executableName": "Guidy-Hybrid-v5"
+      "executableName": "Guidy-4.5-as-CUA"
     },
     "files": [
       "**/*",

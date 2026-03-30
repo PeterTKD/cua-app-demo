@@ -15,6 +15,7 @@ try {
   UIAutomationDetector = require('./ui-automation');
 }
 const { runCuaQuestion } = require('./cua-client');
+const { runCua54Question } = require('./cua_5.4');
 const { runReasonerQuestion, getAvailableModels, getCurrentModel, setCurrentModel } = require('./reasoner-client');
 const { runTreeLocator } = require('./tree-locator-client');
 const { synthesizeSpeech } = require('./tts-client');
@@ -506,13 +507,22 @@ ipcMain.handle('open-history-window', async (event, history) => {
     return true;
   }
 
+  const parentBounds = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow.getBounds()
+    : screen.getPrimaryDisplay().bounds;
+  const targetDisplay = screen.getDisplayMatching(parentBounds);
+  const workAreaWidth = targetDisplay?.workAreaSize?.width || targetDisplay?.bounds?.width || 1280;
+  const workAreaHeight = targetDisplay?.workAreaSize?.height || targetDisplay?.bounds?.height || 900;
+  const historyWindowWidth = Math.max(720, Math.min(960, Math.round(workAreaWidth * 0.55)));
+  const historyWindowHeight = Math.max(520, Math.min(760, Math.round(workAreaHeight * 0.65)));
+
   historyWindow = new BrowserWindow({
-    width: 520,
-    height: 600,
+    width: historyWindowWidth,
+    height: historyWindowHeight,
     parent: mainWindow,
     resizable: true,
     minimizable: false,
-    maximizable: false,
+    maximizable: true,
     alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'history-window-preload.js'),
@@ -520,6 +530,7 @@ ipcMain.handle('open-history-window', async (event, history) => {
       contextIsolation: true
     }
   });
+  historyWindow.setMinimumSize(720, 420);
 
   historyWindow.loadFile('history-window.html');
 
@@ -761,8 +772,10 @@ ipcMain.on('callout-resize', (event, size) => {
   if (!calloutWindow || calloutWindow.isDestroyed() || !size) {
     return;
   }
+  const displayHeight = currentDisplayBounds?.height || screen.getPrimaryDisplay().workAreaSize.height || 1080;
+  const maxHeight = Math.max(160, Math.round(displayHeight * 0.4));
   const width = Math.max(320, Math.min(560, Math.round(size.width || 420)));
-  const height = Math.max(120, Math.min(420, Math.round(size.height || 180)));
+  const height = Math.max(120, Math.min(maxHeight, Math.round(size.height || 180)));
   calloutWindow.setSize(width, height, false);
 });
 
@@ -1029,7 +1042,10 @@ ipcMain.handle('resize-widget', async (event, size) => {
   const height = Math.max(minHeight, Math.round(size.height || 0));
   const display = screen.getDisplayMatching(mainWindow.getBounds());
   const maxWidth = Math.max(minWidth, display.workArea.width - 8);
-  const maxHeight = Math.max(minHeight, display.workArea.height - 8);
+  const maxHeight = Math.max(
+    minHeight,
+    Math.min(display.workArea.height - 8, Math.round(display.workArea.height * 0.4))
+  );
   const nextWidth = Math.min(width, maxWidth);
   const nextHeight = Math.min(height, maxHeight);
 
@@ -1286,7 +1302,7 @@ ipcMain.handle('reasoner-run', async (event, payload) => {
           imageDataUrl: cachedDataUrl
         };
       } else {
-        const native = await captureRunFrame({ includeFull: false });
+        const native = await captureRunFrame({ includeFull: false, maxDimension: 0 });
         if (native?.reasonerDataUrl) {
           payload = { ...payload, imageDataUrl: native.reasonerDataUrl };
         }
@@ -1296,6 +1312,30 @@ ipcMain.handle('reasoner-run', async (event, payload) => {
     return response;
   } catch (error) {
     console.error('Reasoner error:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('cua54-run', async (event, payload) => {
+  try {
+    if (!payload?.imageDataUrl) {
+      const cachedDataUrl = getCapturedFrameDataUrl(getCachedCapturedFrame(payload?.frameId), 72);
+      if (cachedDataUrl) {
+        payload = {
+          ...payload,
+          imageDataUrl: cachedDataUrl
+        };
+      } else {
+        const native = await captureRunFrame({ includeFull: false, maxDimension: 0 });
+        if (native?.reasonerDataUrl) {
+          payload = { ...payload, imageDataUrl: native.reasonerDataUrl };
+        }
+      }
+    }
+    const response = await runCua54Question(payload);
+    return response;
+  } catch (error) {
+    console.error('CUA 5.4 error:', error);
     throw error;
   }
 });

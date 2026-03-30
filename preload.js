@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureRunFrame: (options) => ipcRenderer.invoke('capture-run-frame', options),
   getCapturedFrameDataUrl: (payload) => ipcRenderer.invoke('capture-frame-data-url', payload),
   runCuaQuestion: (payload) => ipcRenderer.invoke('cua-run', payload),
+  runCua54Question: (payload) => ipcRenderer.invoke('cua54-run', payload),
   runReasonerQuestion: (payload) => ipcRenderer.invoke('reasoner-run', payload),
   startTreePrefetch: () => ipcRenderer.invoke('start-tree-prefetch'),
   runTreeLocator: (payload) => ipcRenderer.invoke('tree-locator-run', payload),

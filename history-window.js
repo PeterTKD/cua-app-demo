@@ -68,9 +68,10 @@ function renderHistory(items) {
       return null;
     }
     const input = Number(usage.input_tokens ?? 0);
+    const cached = Number(usage.cached_input_tokens ?? usage.input_tokens_details?.cached_tokens ?? 0);
     const output = Number(usage.output_tokens ?? 0);
     const total = Number(usage.total_tokens ?? (input + output));
-    return { input, output, total };
+    return { input, cached, output, total };
   };
 
   const formatMs = (value) => (Number.isFinite(value) ? `${Math.round(value)} ms` : 'n/a');
@@ -100,8 +101,11 @@ function renderHistory(items) {
   const computeCost = (usage, pricing) => {
     if (!usage || !pricing) return 0;
     const input = Number(usage.input ?? 0);
+    const cached = Number(usage.cached ?? 0);
     const output = Number(usage.output ?? 0);
-    return (input / 1000000) * pricing.input + (output / 1000000) * pricing.output;
+    const nonCachedInput = Math.max(0, input - cached);
+    const cachedRate = Number.isFinite(pricing.cached_input) ? pricing.cached_input : pricing.input;
+    return (nonCachedInput / 1000000) * pricing.input + (cached / 1000000) * cachedRate + (output / 1000000) * pricing.output;
   };
 
   const createCell = (tag, text) => {
@@ -215,6 +219,7 @@ function renderHistory(items) {
     const reasonerUsage = extractUsageTotals(item.reasonerResponse) || { input: 0, output: 0, total: 0 };
 
     let cuaInput = 0;
+    let cuaCached = 0;
     let cuaOutput = 0;
     let cuaTotal = 0;
     if (Array.isArray(item.cuaResponses)) {
@@ -222,6 +227,7 @@ function renderHistory(items) {
         const usage = extractUsageTotals(entry?.response);
         if (usage) {
           cuaInput += usage.input;
+          cuaCached += usage.cached;
           cuaOutput += usage.output;
           cuaTotal += usage.total;
         }
@@ -254,14 +260,15 @@ function renderHistory(items) {
     const grokMeta = item.treeLocatorResponses?.find((entry) => entry?.response?._meta)?.response?._meta || null;
     const grokPricing = grokMeta?.pricing || { input: 0.2, output: 0.5 };
     const grokLabel = grokMeta?.label || 'Grok Tree Locator';
-    const cuaLabel = 'CUA';
-    const cuaPricing = { input: 3, output: 12 };
+    const cuaMeta = item.cuaResponses?.find((entry) => entry?.response?._meta)?.response?._meta || null;
+    const cuaLabel = cuaMeta?.label || 'CUA-5.4';
+    const cuaPricing = cuaMeta?.pricing || { input: 2.5, output: 15, cached_input: 0.25 };
     const ttsPricing = { input: 0.6, output: 12 };
     const ttsLabel = 'GPT-4o-mini-tts';
 
     const reasonerCost = computeCost({ input: reasonerUsage.input, output: reasonerUsage.output }, reasonerPricing);
     const grokCost = computeCost({ input: grokInput, output: grokOutput }, grokPricing);
-    const cuaCost = computeCost({ input: cuaInput, output: cuaOutput }, cuaPricing);
+    const cuaCost = computeCost({ input: cuaInput, cached: cuaCached, output: cuaOutput }, cuaPricing);
     const ttsCost = ttsWasEnabled
       ? computeCost({ input: ttsInput, output: ttsOutput }, ttsPricing)
       : 0;
@@ -320,7 +327,7 @@ function renderHistory(items) {
     const executorLabel = item.actionExecutor ? String(item.actionExecutor).toUpperCase() : 'NONE';
     const treeOverlappedReasoner = treeResolveElapsedMs > 0 && reasonerElapsedMs > 0;
     const executorDuplicatesUia = executorLabel === 'UIA' && Math.abs(executorElapsedMs - uiaElapsedMs) <= 20;
-    const executorDuplicatesCua = executorLabel === 'CUA' && Math.abs(executorElapsedMs - cuaElapsedMs) <= 20;
+    const executorDuplicatesCua = executorLabel === 'CUA-5.4' && Math.abs(executorElapsedMs - cuaElapsedMs) <= 20;
     const showExecutorRow = executorElapsedMs > 0 && !executorDuplicatesUia && !executorDuplicatesCua;
     const uiaStatus = item.uiaAttempted
       ? (item.uiaSucceeded ? 'UIA succeeded' : `UIA failed (${formatFailureReason(item.uiaFailureReason)})`)
@@ -381,11 +388,11 @@ function renderHistory(items) {
       {
         stage: 'UIA Total',
         detail: item.uiaAttempted
-          ? (item.uiaSucceeded ? 'Tree lookup, locator call, and element match' : `Fell back to CUA, ${formatFailureReason(item.uiaFailureReason)}`)
+          ? (item.uiaSucceeded ? 'Tree lookup, locator call, and element match' : `Fell back to CUA-5.4, ${formatFailureReason(item.uiaFailureReason)}`)
           : 'Not attempted',
         time: uiaElapsedMs
       },
-      { stage: 'CUA Model', detail: `${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} call(s)`, time: cuaElapsedMs }
+      { stage: 'CUA-5.4', detail: `${Array.isArray(item.cuaResponses) ? item.cuaResponses.length : 0} call(s)`, time: cuaElapsedMs }
     ];
     if (showExecutorRow) {
       runtimeRows.push({ stage: 'Guidance Total', detail: executorLabel, time: executorElapsedMs });
